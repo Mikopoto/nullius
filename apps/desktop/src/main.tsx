@@ -74,6 +74,12 @@ interface ProjectSnapshot {
   plans: Array<{ id: string; title: string; purpose: string; method?: string; observables?: string[]; successCriteria?: string[]; falsificationCriteria?: string[]; approved: boolean }>;
 }
 
+interface FullAutoCommandResult {
+  ready?: boolean;
+  events?: Array<{ kind: string; title: string; detail?: string }>;
+}
+
+
 interface AppState {
   serverUrl: string;
   projectRoot: string;
@@ -128,11 +134,29 @@ interface AppState {
   exportMarkdown: () => Promise<void>;
 }
 
+function requireProjectRoot(get: () => AppState, set: (patch: Partial<AppState>) => void): string | undefined {
+  const root = get().projectRoot.trim();
+  if (!root) {
+    set({ status: "Choose a project folder first." });
+    return undefined;
+  }
+  return root;
+}
+
+function requireResearchQuestion(get: () => AppState, set: (patch: Partial<AppState>) => void): string | undefined {
+  const question = get().question.trim();
+  if (!question) {
+    set({ status: "Enter a research question first." });
+    return undefined;
+  }
+  return question;
+}
+
 const useAppState = create<AppState>((set, get) => ({
   serverUrl: "http://127.0.0.1:8787",
-  projectRoot: "/tmp/nullius-gui-demo",
-  question: "Does the synthetic slope equal 2.0?",
-  useMock: true,
+  projectRoot: "",
+  question: "",
+  useMock: false,
   activePanel: "setup",
   busy: false,
   status: "Desktop starts the local server automatically. In a browser, start `nullius serve` and connect.",
@@ -172,8 +196,10 @@ const useAppState = create<AppState>((set, get) => ({
   },
   setRole: (role, patch) => set((state) => ({ roles: { ...state.roles, [role]: { ...state.roles[role], ...patch } } })),
   saveModels: async () => {
+    const root = requireProjectRoot(get, set);
+    if (!root) return;
     try {
-      await get().command("project.configure", { root: get().projectRoot, roles: get().roles });
+      await get().command("project.configure", { root, roles: get().roles });
       set({ status: "Models saved to the project" });
     } catch (error) {
       set({ status: `Model save failed: ${String(error)}` });
@@ -186,19 +212,26 @@ const useAppState = create<AppState>((set, get) => ({
   },
   addDataFiles: async () => {
     if (!isTauri()) return;
+    const root = requireProjectRoot(get, set);
+    if (!root) return;
     const picked = await openDialog({ multiple: true, title: "Choose input data files" });
     const files = Array.isArray(picked) ? picked : typeof picked === "string" ? [picked] : [];
     if (files.length === 0) return;
     try {
-      const result = await get().command("data.import", { root: get().projectRoot, files }) as { files: string[] };
+      const result = await get().command("data.import", { root, files }) as { files: string[] };
       set({ dataFiles: result.files, status: `${files.length} data file(s) added; Full Auto will read them from ./data` });
     } catch (error) {
       set({ status: `Data import failed: ${String(error)}` });
     }
   },
   refreshData: async () => {
+    const root = get().projectRoot.trim();
+    if (!root) {
+      set({ dataFiles: [] });
+      return;
+    }
     try {
-      const result = await get().command("data.list", { root: get().projectRoot }) as { files: string[] };
+      const result = await get().command("data.list", { root }) as { files: string[] };
       set({ dataFiles: result.files });
     } catch {
       set({ dataFiles: [] });
@@ -213,9 +246,11 @@ const useAppState = create<AppState>((set, get) => ({
     }
   },
   generatePlan: async () => {
+    const root = requireProjectRoot(get, set);
+    if (!root) return;
     set({ busy: true, status: "Generating plan..." });
     try {
-      await get().command("plan.generate", { root: get().projectRoot });
+      await get().command("plan.generate", { root });
       await get().refreshSnapshot();
       set({ status: "Plan generated: read it, then adopt it" });
     } catch (error) {
@@ -225,8 +260,10 @@ const useAppState = create<AppState>((set, get) => ({
     }
   },
   adoptPlan: async (planId) => {
+    const root = requireProjectRoot(get, set);
+    if (!root) return;
     try {
-      await get().command("plan.adopt", { root: get().projectRoot, planId });
+      await get().command("plan.adopt", { root, planId });
       await get().refreshSnapshot();
       set({ status: "Plan adopted: protocol locked" });
     } catch (error) {
@@ -264,12 +301,16 @@ const useAppState = create<AppState>((set, get) => ({
     return json.result;
   },
   refreshSnapshot: async () => {
-    const snapshot = await get().command("project.open", { root: get().projectRoot }) as ProjectSnapshot;
+    const root = requireProjectRoot(get, set);
+    if (!root) return;
+    const snapshot = await get().command("project.open", { root }) as ProjectSnapshot;
     set({ snapshot, question: snapshot.manifest.question });
   },
   stopRun: async () => {
     try {
-      await get().command("run.stop", { root: get().projectRoot });
+      const root = requireProjectRoot(get, set);
+      if (!root) return;
+      await get().command("run.stop", { root });
       set({ busy: false, status: "Stop requested" });
     } catch (error) {
       set({ status: `Stop failed: ${String(error)}` });
@@ -278,7 +319,9 @@ const useAppState = create<AppState>((set, get) => ({
   resumeRun: async () => {
     set({ busy: true, status: "Resuming...", intervention: undefined });
     try {
-      await get().command("run.resume", { root: get().projectRoot, mock: get().useMock, backend: "auto" });
+      const root = requireProjectRoot(get, set);
+      if (!root) return;
+      await get().command("run.resume", { root, mock: get().useMock, backend: "auto" });
       await get().refreshSnapshot();
       await get().verify();
       set({ status: "Run resumed" });
@@ -291,7 +334,9 @@ const useAppState = create<AppState>((set, get) => ({
   steer: async (instruction) => {
     if (!instruction.trim()) return;
     try {
-      await get().command("run.steer", { root: get().projectRoot, instruction });
+      const root = requireProjectRoot(get, set);
+      if (!root) return;
+      await get().command("run.steer", { root, instruction });
       set({ status: "Steering instruction saved" });
     } catch (error) {
       set({ status: `Steering failed: ${String(error)}` });
@@ -299,7 +344,9 @@ const useAppState = create<AppState>((set, get) => ({
   },
   approvePatch: async (patchId) => {
     try {
-      await get().command("patch.approve", { root: get().projectRoot, patchId });
+      const root = requireProjectRoot(get, set);
+      if (!root) return;
+      await get().command("patch.approve", { root, patchId });
       await get().refreshSnapshot();
       await get().verify();
       set({ status: "Patch approved" });
@@ -309,7 +356,9 @@ const useAppState = create<AppState>((set, get) => ({
   },
   rejectPatch: async (patchId) => {
     try {
-      await get().command("patch.reject", { root: get().projectRoot, patchId });
+      const root = requireProjectRoot(get, set);
+      if (!root) return;
+      await get().command("patch.reject", { root, patchId });
       await get().refreshSnapshot();
       await get().verify();
       set({ status: "Patch rejected" });
@@ -318,9 +367,11 @@ const useAppState = create<AppState>((set, get) => ({
     }
   },
   connect: async () => {
+    const root = requireProjectRoot(get, set);
+    if (!root) return;
     set({ busy: true, status: "Connecting..." });
     try {
-      const snapshot = await get().command("project.open", { root: get().projectRoot }) as ProjectSnapshot;
+      const snapshot = await get().command("project.open", { root }) as ProjectSnapshot;
       set({ snapshot, question: snapshot.manifest.question, status: "Connected", activePanel: "manuscript" });
       await get().refreshKeys();
       await get().refreshData();
@@ -332,14 +383,16 @@ const useAppState = create<AppState>((set, get) => ({
     }
   },
   createProject: async () => {
+    const root = requireProjectRoot(get, set);
+    const question = requireResearchQuestion(get, set);
+    if (!root || !question) return;
     set({ busy: true, status: "Creating project..." });
-    const question = get().question;
     try {
       await get().command("project.create", {
-        root: get().projectRoot,
+        root,
         manifest: {
           schemaVersion: 1,
-          name: question.trim() || "Untitled Nullius Project",
+          name: question,
           question,
           roles: get().roles,
           settings: { maxLanes: 3, depth: "standard", sandboxPolicy: "required", selfCorrectionRounds: 2 },
@@ -355,12 +408,23 @@ const useAppState = create<AppState>((set, get) => ({
     }
   },
   run: async () => {
+    const root = requireProjectRoot(get, set);
+    if (!root) return;
     set({ busy: true, status: "Running Full Auto..." });
     try {
-      await get().command("run.start", { root: get().projectRoot, mock: get().useMock, backend: "auto" });
+      const result = await get().command("run.start", { root, mock: get().useMock, backend: "auto" }) as FullAutoCommandResult;
       await get().refreshSnapshot();
-      set({ status: "Run completed", activePanel: "manuscript" });
       await get().verify();
+      const intervention = result.events?.find((event) => event.kind === "intervention.required");
+      if (intervention) {
+        set({
+          status: intervention.title,
+          intervention: { title: intervention.title, detail: intervention.detail ?? "" },
+          activePanel: intervention.title.includes("Plan") ? "setup" : "manuscript"
+        });
+      } else {
+        set({ status: result.ready ? "Run completed: ready" : "Run completed: not ready", activePanel: "manuscript" });
+      }
     } catch (error) {
       set({ status: `Run failed: ${String(error)}` });
     } finally {
@@ -368,16 +432,20 @@ const useAppState = create<AppState>((set, get) => ({
     }
   },
   verify: async () => {
+    const root = requireProjectRoot(get, set);
+    if (!root) return;
     try {
-      const result = await get().command("gates.verify", { root: get().projectRoot, depth: "standard" }) as { readiness: Readiness };
+      const result = await get().command("gates.verify", { root, depth: "standard" }) as { readiness: Readiness };
       set({ readiness: result.readiness, status: result.readiness.ready ? "Ready" : "Not ready" });
     } catch (error) {
       set({ status: `Verify failed: ${String(error)}` });
     }
   },
   exportMarkdown: async () => {
+    const root = requireProjectRoot(get, set);
+    if (!root) return;
     try {
-      const result = await get().command("export.markdown", { root: get().projectRoot }) as { body: string };
+      const result = await get().command("export.markdown", { root }) as { body: string };
       set((state) => state.snapshot
         ? { snapshot: { ...state.snapshot, manuscriptBody: result.body }, status: "Markdown loaded" }
         : { status: "Markdown loaded" });
@@ -581,15 +649,11 @@ function SetupPanel() {
         <h2><span className="step-chip">2</span>Project</h2>
         <label>Project folder</label>
         <div className="input-row">
-          <input value={state.projectRoot} onChange={(event) => state.setField("projectRoot", event.currentTarget.value)} />
+          <input placeholder="Choose or enter a project folder" value={state.projectRoot} onChange={(event) => state.setField("projectRoot", event.currentTarget.value)} />
           {isTauri() ? <button onClick={() => void state.browseProjectFolder()}>Browse…</button> : null}
         </div>
         <label>Research question</label>
-        <textarea value={state.question} onChange={(event) => state.setField("question", event.currentTarget.value)} />
-        <label className="check-row">
-          <input type="checkbox" checked={state.useMock} onChange={(event) => state.setUseMock(event.currentTarget.checked)} />
-          Use deterministic mock agents (free demo, no API key)
-        </label>
+        <textarea placeholder="What research question should Nullius investigate?" value={state.question} onChange={(event) => state.setField("question", event.currentTarget.value)} />
         <div className="button-stack">
           <button className="primary" onClick={() => void state.createProject()}>Create project</button>
           <button onClick={() => void state.connect()}>Open existing</button>
@@ -681,8 +745,8 @@ const tutorialSteps: Array<{ en: { title: string; body: string }; ja: { title: s
     ja: { title: "手順2: キーを保存", body: "Setup → API Keys でプロバイダを選び、キーを貼り付けてSaveを押します。macOS: システムのキーチェーンに安全に保存され、次回も使えます。Windows/Linux: アプリを閉じるまでの一時保存です。恒久化するには起動前に環境変数を設定してください(Windows PowerShell: setx OPENROUTER_API_KEY \"sk-or-...\" のあと再起動 / Linux: ~/.bashrc に export OPENROUTER_API_KEY=sk-or-... を追記)。" }
   },
   {
-    en: { title: "Step 3: Create a project", body: "In Setup → Project, press Browse… to pick an empty folder, write your research question in plain language, and press Create project. Untick \"Use deterministic mock agents\" for real research (leave it ON to try the app for free without any API key)." },
-    ja: { title: "手順3: プロジェクト作成", body: "Setup → Project で Browse… を押して空のフォルダを選び、研究の問いを普通の言葉で書いて Create project を押します。本番の研究では「Use deterministic mock agents」のチェックを外してください(ONのままだとAPIキー不要の無料お試しモードです)。" }
+    en: { title: "Step 3: Create a project", body: "In Setup → Project, press Browse… to pick an empty folder, write your research question in plain language, and press Create project. Nullius starts from an empty manuscript and only writes evidence-backed patches after the plan is adopted." },
+    ja: { title: "手順3: プロジェクト作成", body: "Setup → Project で Browse… を押して空のフォルダを選び、研究の問いを普通の言葉で書いて Create project を押します。Nulliusは空の原稿から始め、計画が採択されたあとに証拠で支えられたパッチだけを書き込みます。" }
   },
   {
     en: { title: "Step 4: Add your data (optional)", body: "Press \"Add data files…\" and pick your CSV, JSON, or text files. They are copied into the project's data/ folder, and every Full Auto run automatically places them at ./data/ in the analysis working directory and instructs the AI to base the research on them. With no files, the AI generates the data the plan requires." },
@@ -709,8 +773,8 @@ const tutorialSteps: Array<{ en: { title: string; body: string }; ja: { title: s
     ja: { title: "手順9: Readiness確認とエクスポート", body: "Readinessタブでゲートごとの信号を確認します。全部グリーンになったらExportを押してください。最終レポートは <プロジェクトフォルダ>/manuscript/report.md にあり、どこでも開ける普通のMarkdownファイルです。" }
   },
   {
-    en: { title: "Troubleshooting", body: "Run fails immediately with an auth error → the key is missing or wrong (check Setup → API Keys). \"No eligible lane\" or a plan-approval pause → adopt a plan in Setup → Plans. Nothing costs money while the mock checkbox is ON." },
-    ja: { title: "困ったとき", body: "実行が認証エラーで即失敗 → キー未設定か間違いです(Setup → API Keysを確認)。「No eligible lane」や計画承認待ちで停止 → Setup → Plans で計画をAdoptしてください。mockチェックがONの間は一切課金されません。" }
+    en: { title: "Troubleshooting", body: "Run fails immediately with an auth error → the key is missing or wrong (check Setup → API Keys). A plan-approval pause means Full Auto has drafted a protocol and is waiting for you to adopt it in Setup → Plans. Execution errors appear in the Mission Console with the command, stderr, and generated files." },
+    ja: { title: "困ったとき", body: "実行が認証エラーで即失敗 → キー未設定か間違いです(Setup → API Keysを確認)。計画承認待ちで止まった場合は、Full Autoがプロトコル案を作り、Setup → Plansで採択されるのを待っています。実行エラーはMission Consoleにコマンド、stderr、生成ファイルと一緒に表示されます。" }
   }
 ];
 

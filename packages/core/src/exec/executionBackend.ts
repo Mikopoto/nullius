@@ -188,6 +188,7 @@ function runPyodideWorker(code: string, nodeDir: string, options: ExecutionOptio
   return new Promise((resolve) => {
     const timeoutMs = (options.timeoutSec ?? 30) * 1000;
     const worker = new Worker(resolvePyodideWorkerUrl(), {
+      execArgv: [],
       workerData: {
         code,
         nodeDir,
