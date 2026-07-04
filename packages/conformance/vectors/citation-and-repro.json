@@ -1,0 +1,60 @@
+{
+  "suite": "citation-and-repro",
+  "cases": [
+    {
+      "name": "subset title spoof does not match",
+      "input": {
+        "operation": "titlesMatch",
+        "left": "Deep Learning",
+        "right": "A Comprehensive Survey of Deep Learning Methods for Medical Image Segmentation and Diagnosis"
+      },
+      "expect": {
+        "value": false
+      }
+    },
+    {
+      "name": "subtitle truncation still matches",
+      "input": {
+        "operation": "titlesMatch",
+        "left": "Deep Residual Learning for Image Recognition",
+        "right": "Deep Residual Learning for Image Recognition: An Empirical Study"
+      },
+      "expect": {
+        "value": true
+      }
+    },
+    {
+      "name": "family names overlap ignores et al",
+      "input": {
+        "operation": "authorFamilyNamesOverlap",
+        "left": "Vaswani et al.",
+        "right": "Ashish Vaswani, Noam Shazeer"
+      },
+      "expect": {
+        "value": true
+      }
+    },
+    {
+      "name": "extract citation keys and ignore email",
+      "input": {
+        "operation": "citationKeys",
+        "body": "As shown [@vaswani2017] and confirmed [@he2016; @smith2020], see also @doe2021. Contact someone@example.org."
+      },
+      "expect": {
+        "values": ["vaswani2017", "he2016", "smith2020", "doe2021"]
+      }
+    },
+    {
+      "name": "canonical equality absorbs float formatting",
+      "input": {
+        "operation": "canonicallyEqualText",
+        "left": "slope,2.0000\r\nintercept,0.5",
+        "right": "slope,2.0\nintercept,5e-1"
+      },
+      "expect": {
+        "value": true
+      }
+    }
+  ]
+}
+

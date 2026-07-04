@@ -1,0 +1,154 @@
+{
+  "suite": "evidence-gates",
+  "cases": [
+    {
+      "name": "result claim requires successful primary execution evidence",
+      "input": {
+        "operation": "claimCanEnterManuscript",
+        "claimId": "claim-fit",
+        "project": {
+          "manuscriptBody": "",
+          "evidence": [
+            {
+              "id": "ev-fit",
+              "type": "execution",
+              "title": "Run output",
+              "summary": "metric,value\nslope,2.0\n",
+              "path": "artifacts/fit.csv",
+              "createdAt": "1970-01-01T00:00:00.000Z",
+              "sourceActivityId": "activity-run",
+              "validation": "valid",
+              "review": "approved",
+              "execution": {
+                "producingCommand": "python analysis.py",
+                "exitCode": 0,
+                "stdoutPath": "logs/stdout.log",
+                "stderrPath": "logs/stderr.log",
+                "artifactPaths": ["artifacts/fit.csv"],
+                "sha256ByPath": { "artifacts/fit.csv": "abc" },
+                "environmentSummary": "python"
+              }
+            }
+          ],
+          "claims": [
+            {
+              "id": "claim-fit",
+              "text": "The fit slope is 2.0.",
+              "type": "result",
+              "supportRefs": [
+                { "targetType": "evidence", "targetId": "ev-fit", "role": "primary", "validation": "valid" }
+              ],
+              "validation": "valid",
+              "review": "approved",
+              "qmdPatchIds": []
+            }
+          ],
+          "literature": []
+        }
+      },
+      "expect": {
+        "value": true
+      }
+    },
+    {
+      "name": "ready manuscript passes deterministic readiness",
+      "input": {
+        "operation": "readinessReport",
+        "project": {
+          "manuscriptBody": "# Abstract\nSummary text.\n# Introduction\nBackground text.\n# Methods\nMethod text.\n# Results\nThe fit slope is 2.0.\n# Discussion\nDiscussion text.\n# Limitations\nLimitation text.\n# References\nReference list.",
+          "evidence": [
+            {
+              "id": "ev-a",
+              "type": "execution",
+              "title": "Run output",
+              "summary": "metric,value\nslope,2.0\n",
+              "path": "artifacts/fit.csv",
+              "createdAt": "1970-01-01T00:00:00.000Z",
+              "sourceActivityId": "activity-run",
+              "validation": "valid",
+              "review": "approved",
+              "execution": {
+                "producingCommand": "python analysis.py",
+                "exitCode": 0,
+                "stdoutPath": "logs/stdout.log",
+                "stderrPath": "logs/stderr.log",
+                "artifactPaths": ["artifacts/fit.csv"],
+                "sha256ByPath": { "artifacts/fit.csv": "abc" },
+                "environmentSummary": "python"
+              }
+            },
+            {
+              "id": "ev-b",
+              "type": "execution",
+              "title": "Run output 2",
+              "summary": "metric,value\nslope,2.0\n",
+              "path": "artifacts/fit2.csv",
+              "createdAt": "1970-01-01T00:00:00.000Z",
+              "sourceActivityId": "activity-run",
+              "validation": "valid",
+              "review": "approved",
+              "execution": {
+                "producingCommand": "python analysis.py",
+                "exitCode": 0,
+                "stdoutPath": "logs/stdout.log",
+                "stderrPath": "logs/stderr.log",
+                "artifactPaths": ["artifacts/fit2.csv"],
+                "sha256ByPath": { "artifacts/fit2.csv": "def" },
+                "environmentSummary": "python"
+              }
+            }
+          ],
+          "claims": [
+            {
+              "id": "claim-a",
+              "text": "The fit slope is 2.0.",
+              "type": "result",
+              "supportRefs": [
+                { "targetType": "evidence", "targetId": "ev-a", "role": "primary", "validation": "valid" }
+              ],
+              "validation": "valid",
+              "review": "approved",
+              "qmdPatchIds": []
+            },
+            {
+              "id": "claim-b",
+              "text": "The fit slope is 2.0.",
+              "type": "result",
+              "supportRefs": [
+                { "targetType": "evidence", "targetId": "ev-b", "role": "primary", "validation": "valid" }
+              ],
+              "validation": "valid",
+              "review": "approved",
+              "qmdPatchIds": []
+            }
+          ],
+          "literature": [],
+          "patches": []
+        }
+      },
+      "expect": {
+        "ready": true,
+        "foundSections": 7,
+        "supportedClaims": 2,
+        "ungroundedResultNumbers": []
+      }
+    },
+    {
+      "name": "fabricated number blocks manuscript patch",
+      "input": {
+        "operation": "stageManuscriptPatch",
+        "body": "# Abstract\nSummary text.\n# Introduction\nBackground text.\n# Methods\nMethod text.\n# Results\nThe fit slope is 9.4142 and follows prior work [@missing2024].\n# Discussion\nDiscussion text.\n# Limitations\nLimitation text.\n# References\nReference list.",
+        "artifactTexts": ["metric,value\nslope,2.0\n"],
+        "project": {
+          "manuscriptBody": "# Abstract\nSummary text.\n# Introduction\nBackground text.\n# Methods\nMethod text.\n# Results\nThe fit slope is 2.0.\n# Discussion\nDiscussion text.\n# Limitations\nLimitation text.\n# References\nReference list.",
+          "evidence": [],
+          "claims": [],
+          "literature": []
+        }
+      },
+      "expect": {
+        "status": "needsRevision"
+      }
+    }
+  ]
+}

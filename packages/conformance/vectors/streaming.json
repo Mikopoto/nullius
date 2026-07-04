@@ -1,0 +1,54 @@
+{
+  "suite": "streaming",
+  "cases": [
+    {
+      "name": "openai content reasoning usage",
+      "input": {
+        "dialect": "openAI",
+        "lines": [
+          "data: {\"choices\":[{\"delta\":{\"reasoning\":\"thinking about \"}}]}",
+          "data: {\"choices\":[{\"delta\":{\"reasoning\":\"slopes\"}}]}",
+          "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"a\\\":\"}}]}",
+          ": keep-alive comment",
+          "",
+          "data: {\"choices\":[{\"delta\":{\"content\":\"1}\"},\"finish_reason\":\"stop\"}]}",
+          "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"completion_tokens_details\":{\"reasoning_tokens\":3}}}",
+          "data: [DONE]"
+        ]
+      },
+      "expect": {
+        "text": "{\"a\":1}",
+        "reasoning": "thinking about slopes",
+        "finishReason": "stop",
+        "promptTokens": 10,
+        "completionTokens": 5,
+        "reasoningTokens": 3,
+        "isDone": true
+      }
+    },
+    {
+      "name": "anthropic text thinking usage",
+      "input": {
+        "dialect": "anthropic",
+        "lines": [
+          "event: message_start",
+          "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":42}}}",
+          "event: content_block_delta",
+          "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"let me check\"}}",
+          "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"{\\\"ok\\\":true}\"}}",
+          "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}",
+          "data: {\"type\":\"message_stop\"}"
+        ]
+      },
+      "expect": {
+        "text": "{\"ok\":true}",
+        "reasoning": "let me check",
+        "finishReason": "end_turn",
+        "promptTokens": 42,
+        "completionTokens": 7,
+        "isDone": true
+      }
+    }
+  ]
+}
+
