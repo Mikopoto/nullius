@@ -11,6 +11,7 @@ type Role = "planner" | "executor" | "reviewer" | "synthesizer" | "system" | "us
 type Panel = "setup" | "tutorial" | "manuscript" | "readiness" | "graph" | "evidence" | "citations";
 type KeyProvider = "openrouter" | "openai" | "anthropic" | "customOpenAICompatible";
 type RoleName = "planner" | "executor" | "reviewer";
+type ActivitySource = "gui" | "cli" | "server" | "core" | "externalAgent" | "gate" | "sandbox" | "reviewer";
 interface RoleConfig { provider: KeyProvider; model: string; reasoningEffort: "none" | "low" | "medium" | "high" }
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 const defaultRoles = (): Record<RoleName, RoleConfig> => ({
@@ -34,11 +35,32 @@ interface StreamLine {
 
 interface TimelineEvent {
   id: number;
+  key?: string;
   role: Role;
   title: string;
   detail: string;
   phase: string;
+  source?: ActivitySource;
+  command?: string;
+  exitCode?: number | null;
+  ts?: string;
   severity?: "ok" | "warning" | "critical";
+}
+
+interface ActivityJournalEvent {
+  seq: number;
+  ts: string;
+  source: ActivitySource;
+  actor: string;
+  role: Role;
+  phase: string;
+  title: string;
+  detail?: string;
+  severity?: "ok" | "warning" | "critical";
+  command?: string;
+  exitCode?: number | null;
+  projectRoot: string;
+  runId?: string;
 }
 
 interface LocalServerResult {
@@ -79,6 +101,30 @@ interface FullAutoCommandResult {
   events?: Array<{ kind: string; title: string; detail?: string }>;
 }
 
+function activityToTimelineEvent(event: ActivityJournalEvent): TimelineEvent {
+  return {
+    key: `activity:${event.seq}:${event.ts}`,
+    id: event.seq,
+    role: event.role,
+    phase: event.phase,
+    title: event.title,
+    detail: event.detail ?? "",
+    source: event.source,
+    ts: event.ts,
+    severity: event.severity ?? "ok",
+    ...(event.command === undefined ? {} : { command: event.command }),
+    ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode })
+  };
+}
+
+function isActivityJournalEvent(event: ActivityJournalEvent | { seq: number; role: Role; kind: string; title: string; detail?: string }): event is ActivityJournalEvent {
+  return "source" in event;
+}
+
+function isFullAutoTimelineEvent(event: ActivityJournalEvent | { seq: number; role: Role; kind: string; title: string; detail?: string }): event is { seq: number; role: Role; kind: string; title: string; detail?: string } {
+  return "kind" in event;
+}
+
 
 interface AppState {
   serverUrl: string;
@@ -92,6 +138,7 @@ interface AppState {
   streamLines: StreamLine[];
   consoleQuery: string;
   consoleRoleFilter: "all" | Role;
+  consoleSourceFilter: "all" | ActivitySource;
   intervention: { title: string; detail: string } | undefined;
   snapshot?: ProjectSnapshot;
   readiness: Readiness | undefined;
@@ -118,9 +165,12 @@ interface AppState {
   adoptPlan: (planId: string) => Promise<void>;
   setConsoleQuery: (value: string) => void;
   setConsoleRoleFilter: (value: "all" | Role) => void;
+  setConsoleSourceFilter: (value: "all" | ActivitySource) => void;
   appendEvent: (event: TimelineEvent) => void;
   appendStreamDelta: (event: { runId: string; role: Role; purpose: string; kind: string; text?: string; usage?: StreamLine["usage"] }) => void;
   refreshSnapshot: () => Promise<void>;
+  watchActivity: () => Promise<void>;
+  copyAgentHandoff: () => Promise<void>;
   stopRun: () => Promise<void>;
   resumeRun: () => Promise<void>;
   steer: (instruction: string) => Promise<void>;
@@ -164,6 +214,7 @@ const useAppState = create<AppState>((set, get) => ({
   streamLines: [],
   consoleQuery: "",
   consoleRoleFilter: "all",
+  consoleSourceFilter: "all",
   intervention: undefined,
   readiness: undefined,
   keyProvider: "openrouter",
@@ -272,7 +323,12 @@ const useAppState = create<AppState>((set, get) => ({
   },
   setConsoleQuery: (value) => set({ consoleQuery: value }),
   setConsoleRoleFilter: (value) => set({ consoleRoleFilter: value }),
-  appendEvent: (event) => set((state) => ({ events: [...state.events, event] })),
+  setConsoleSourceFilter: (value) => set({ consoleSourceFilter: value }),
+  appendEvent: (event) => set((state) => {
+    const eventKey = event.key ?? `${event.id}:${event.source ?? "run"}:${event.phase}:${event.title}`;
+    if (state.events.some((item) => (item.key ?? `${item.id}:${item.source ?? "run"}:${item.phase}:${item.title}`) === eventKey)) return {};
+    return { events: [...state.events, { ...event, key: eventKey }].slice(-1000) };
+  }),
   appendStreamDelta: (event) => set((state) => {
     const key = `${event.runId}:${event.role}:${event.purpose}`;
     const now = Date.now();
@@ -305,6 +361,42 @@ const useAppState = create<AppState>((set, get) => ({
     if (!root) return;
     const snapshot = await get().command("project.open", { root }) as ProjectSnapshot;
     set({ snapshot, question: snapshot.manifest.question });
+  },
+  watchActivity: async () => {
+    const root = requireProjectRoot(get, set);
+    if (!root) return;
+    try {
+      const result = await get().command("activity.watch", { root }) as { events: ActivityJournalEvent[] };
+      for (const event of result.events) get().appendEvent(activityToTimelineEvent(event));
+    } catch (error) {
+      set({ status: `Activity watch failed: ${String(error)}` });
+    }
+  },
+  copyAgentHandoff: async () => {
+    const root = requireProjectRoot(get, set);
+    if (!root) return;
+    const snapshot = get().snapshot;
+    const readiness = get().readiness;
+    const prompt = [
+      "You are operating Nullius from the command line as an external AI agent.",
+      "Nullius is evidence-gated: do not edit the manuscript directly unless a command explicitly stages or approves a patch.",
+      "",
+      `Project root: ${root}`,
+      `Question: ${snapshot?.manifest.question ?? get().question}`,
+      `Readiness: ${readiness ? `${Math.round(readiness.readinessScore * 100)}% (${readiness.ready ? "ready" : "not ready"})` : "unknown"}`,
+      "",
+      "Useful commands:",
+      `nullius status "${root}"`,
+      `nullius verify --json "${root}"`,
+      `nullius plan "${root}"`,
+      `nullius run "${root}"`,
+      `nullius steer "your instruction" "${root}"`,
+      `nullius export md "${root}"`,
+      "",
+      "The GUI watches runtime/events.jsonl in real time, so every command you run will appear in Live Activity."
+    ].join("\n");
+    await navigator.clipboard.writeText(prompt);
+    set({ status: "Agent handoff copied" });
   },
   stopRun: async () => {
     try {
@@ -373,6 +465,7 @@ const useAppState = create<AppState>((set, get) => ({
     try {
       const snapshot = await get().command("project.open", { root }) as ProjectSnapshot;
       set({ snapshot, question: snapshot.manifest.question, status: "Connected", activePanel: "manuscript" });
+      await get().watchActivity();
       await get().refreshKeys();
       await get().refreshData();
       await get().verify();
@@ -503,24 +596,33 @@ function App() {
           kind?: string;
           text?: string;
           usage?: StreamLine["usage"];
-          event?: { seq: number; role: Role; kind: string; title: string; detail?: string };
+          root?: string;
+          event?: ActivityJournalEvent | { seq: number; role: Role; kind: string; title: string; detail?: string };
         };
         if (payload.type === "state.changed") {
           useAppState.setState({ readiness: payload.readiness });
+          if (payload.root && payload.root === useAppState.getState().projectRoot.trim()) {
+            void useAppState.getState().refreshSnapshot();
+          }
+        }
+        if (payload.type === "activity.event" && payload.event && isActivityJournalEvent(payload.event)) {
+          appendEvent(activityToTimelineEvent(payload.event));
         }
         if (payload.type === "stream.delta" && payload.runId && payload.role && payload.purpose && payload.kind) {
           pendingStream.push({ runId: payload.runId, role: payload.role, purpose: payload.purpose, kind: payload.kind, ...(payload.text ? { text: payload.text } : {}), ...(payload.usage ? { usage: payload.usage } : {}) });
         }
-        if (payload.type === "intervention.required" && payload.event) {
+        if (payload.type === "intervention.required" && payload.event && isFullAutoTimelineEvent(payload.event)) {
           useAppState.setState({ intervention: { title: payload.event.title, detail: payload.event.detail ?? "" }, status: payload.event.title });
         }
-        if ((payload.type === "run.event" || payload.type === "intervention.required") && payload.event) {
+        if (payload.type === "intervention.required" && payload.event && isFullAutoTimelineEvent(payload.event)) {
           appendEvent({
+            key: `intervention:${payload.event.seq}:${payload.event.title}`,
             id: payload.event.seq,
             role: payload.event.role,
             phase: payload.event.kind,
             title: payload.event.title,
             detail: payload.event.detail ?? "",
+            source: "gui",
             severity: payload.event.kind.includes("required") ? "warning" : "ok"
           });
         }
@@ -955,19 +1057,26 @@ function MissionConsole() {
   const events = useAppState((state) => state.events);
   const streamLines = useAppState((state) => state.streamLines);
   const status = useAppState((state) => state.status);
+  const readiness = useAppState((state) => state.readiness);
   const query = useAppState((state) => state.consoleQuery);
   const roleFilter = useAppState((state) => state.consoleRoleFilter);
+  const sourceFilter = useAppState((state) => state.consoleSourceFilter);
   const setQuery = useAppState((state) => state.setConsoleQuery);
   const setRoleFilter = useAppState((state) => state.setConsoleRoleFilter);
+  const setSourceFilter = useAppState((state) => state.setConsoleSourceFilter);
+  const copyAgentHandoff = useAppState((state) => state.copyAgentHandoff);
   const timelineEnd = useRef<HTMLSpanElement>(null);
+  const latestEvent = events.at(-1);
+  const latestBlocking = readiness ? blockingReason(readiness) : undefined;
   const filteredEvents = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return events.filter((event) => {
       if (roleFilter !== "all" && event.role !== roleFilter) return false;
+      if (sourceFilter !== "all" && event.source !== sourceFilter) return false;
       if (!needle) return true;
-      return `${event.role} ${event.phase} ${event.title} ${event.detail}`.toLowerCase().includes(needle);
+      return `${event.source ?? ""} ${event.role} ${event.phase} ${event.command ?? ""} ${event.title} ${event.detail}`.toLowerCase().includes(needle);
     });
-  }, [events, query, roleFilter]);
+  }, [events, query, roleFilter, sourceFilter]);
 
   useEffect(() => {
     timelineEnd.current?.scrollIntoView({ block: "end" });
@@ -976,8 +1085,16 @@ function MissionConsole() {
   return (
     <aside className="console">
       <div className="console-header">
-        <span>Mission Console</span>
+        <span>Live Activity</span>
+        <button onClick={() => void copyAgentHandoff()}>Copy Agent Handoff</button>
         <button onClick={() => timelineEnd.current?.scrollIntoView()}>Jump latest</button>
+      </div>
+      <div className="activity-status">
+        <span><strong>Command</strong>{latestEvent?.command ?? "idle"}</span>
+        <span><strong>Phase</strong>{latestEvent?.phase ?? "waiting"}</span>
+        <span><strong>Readiness</strong>{readiness ? `${Math.round(readiness.readinessScore * 100)}%` : "—"}</span>
+        <span><strong>Exit</strong>{latestEvent?.exitCode ?? "—"}</span>
+        <span className={latestBlocking ? "status-warning" : "status-ok"}><strong>Blocker</strong>{latestBlocking ?? "none"}</span>
       </div>
       <InterventionCard status={status} />
       <div className="console-tools">
@@ -990,6 +1107,17 @@ function MissionConsole() {
           <option value="synthesizer">Synthesizer</option>
           <option value="system">System</option>
           <option value="user">User</option>
+        </select>
+        <select value={sourceFilter} onChange={(event) => setSourceFilter(event.currentTarget.value as "all" | ActivitySource)}>
+          <option value="all">All sources</option>
+          <option value="gui">GUI</option>
+          <option value="cli">CLI</option>
+          <option value="externalAgent">External agent</option>
+          <option value="gate">Gate</option>
+          <option value="sandbox">Sandbox</option>
+          <option value="reviewer">Reviewer</option>
+          <option value="server">Server</option>
+          <option value="core">Core</option>
         </select>
       </div>
       <div className="stream-stack">
@@ -1011,12 +1139,14 @@ function MissionConsole() {
         ))}
       </div>
       <div className="timeline">
-        {filteredEvents.length === 0 ? <p className="muted-console">Quiet for now. Events from planning, execution, review, and gating stream here during a run.</p> : filteredEvents.map((event) => (
-          <div className={`event ${event.role}`} key={`${event.id}-${event.phase}-${event.title}`}>
+        {filteredEvents.length === 0 ? <p className="muted-console">Quiet for now. GUI runs and external `nullius` CLI commands appear here as soon as runtime/events.jsonl changes.</p> : filteredEvents.map((event) => (
+          <div className={`event ${event.role} ${event.severity ?? "ok"}`} key={event.key ?? `${event.id}-${event.phase}-${event.title}`}>
             <div className="event-top">
               <span>#{event.id}</span>
+              {event.source ? <span className={`source-chip source-${event.source}`}>{sourceLabel(event.source)}</span> : null}
               <strong>{event.role}</strong>
               <em>{event.phase}</em>
+              {event.exitCode !== undefined && event.exitCode !== null ? <span className={event.exitCode === 0 ? "exit-ok" : "exit-bad"}>exit {event.exitCode}</span> : null}
             </div>
             <h3>{event.title}</h3>
             <p>{event.detail}</p>
@@ -1062,6 +1192,31 @@ function InterventionCard({ status }: { status: string }) {
 function formatLatency(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function sourceLabel(source: ActivitySource): string {
+  switch (source) {
+    case "externalAgent": return "External agent";
+    case "gui": return "GUI";
+    case "cli": return "CLI";
+    case "server": return "Server";
+    case "core": return "Core";
+    case "gate": return "Gate";
+    case "sandbox": return "Sandbox";
+    case "reviewer": return "Reviewer";
+  }
+}
+
+function blockingReason(readiness: Readiness): string | undefined {
+  if (readiness.ready) return undefined;
+  if (readiness.criticalCount > 0) return `${readiness.criticalCount} critical review(s)`;
+  if (readiness.executableErrorCount > 0) return `${readiness.executableErrorCount} execution error(s)`;
+  if (readiness.ungroundedResultNumbers.length > 0) return "ungrounded result numbers";
+  if (readiness.internalLeakTerms.length > 0) return "internal terms in manuscript";
+  if (readiness.missingArtifactCount > 0) return `${readiness.missingArtifactCount} missing artifact(s)`;
+  if (readiness.staleSupportRefCount > 0) return `${readiness.staleSupportRefCount} stale support ref(s)`;
+  if (readiness.orphanResultClaimCount > 0) return `${readiness.orphanResultClaimCount} orphan result claim(s)`;
+  return "readiness gates not complete";
 }
 
 function renderMarkdownLike(markdown: string): React.ReactNode[] {

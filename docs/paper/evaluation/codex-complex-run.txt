@@ -1,0 +1,114 @@
+Comparison 2: hard multi-table complete-case OLS and treatment-by-high-CRP interaction.
+Codex CLI version: codex-cli 0.141.0
+Codex-alone command model: gpt-5.5
+Codex-alone command reasoning effort: xhigh
+Codex-alone command included: codex exec -m gpt-5.5 -c model_reasoning_effort=xhigh ...
+Codex+Nullius condition: current Codex session drove the local Nullius CLI/project files because granting a second external Codex subprocess access to the local repository was rejected by safety review.
+
+Codex-alone final message:
+Done. I wrote the report to [report.md](/private/tmp/nullius-complex-codex-alone/report.md:1) and saved the reproducible script at [scripts/analyze_ols.py](/private/tmp/nullius-complex-codex-alone/scripts/analyze_ols.py:1).
+
+Key outputs:
+- Complete-case N: 222; missing `outcome_12w`: 18
+- Treated/control complete cases: 123 / 99
+- Adjusted treatment estimate: -5.053, SE 0.209, 95% CI -5.465 to -4.641, p<0.001
+- R-squared: 0.885; RMSE: 1.505
+- Treatment-by-`high_crp` interaction: -1.235, SE 0.449, 95% CI -2.119 to -0.350, p=0.006
+
+Artifacts saved:
+- [artifacts/analysis_results.json](/private/tmp/nullius-complex-codex-alone/artifacts/analysis_results.json:1)
+- [artifacts/model_coefficients.csv](/private/tmp/nullius-complex-codex-alone/artifacts/model_coefficients.csv:1)
+- [artifacts/complete_case_data.csv](/private/tmp/nullius-complex-codex-alone/artifacts/complete_case_data.csv:1)
+
+Verified with `python3 -W error scripts/analyze_ols.py`. I did not use Nullius or the nullius CLI.
+
+Codex-alone audit:
+{
+  "ok": false,
+  "gate": "all",
+  "readiness": {
+    "blankBody": false,
+    "foundSections": 6,
+    "requiredSections": 7,
+    "supportedClaims": 0,
+    "totalNodeCount": 0,
+    "reviewedNodeCount": 0,
+    "openMarkers": 0,
+    "criticalCount": 0,
+    "executableErrorCount": 0,
+    "staleSupportRefCount": 0,
+    "orphanResultClaimCount": 0,
+    "approvedUnappliedPatchCount": 0,
+    "pendingPatchCount": 0,
+    "rejectedClaimPatchCount": 0,
+    "missingArtifactCount": 0,
+    "unverifiedCitationRefCount": 0,
+    "internalLeakTerms": [],
+    "unapprovedAmendmentCount": 0,
+    "ungroundedResultNumbers": [
+      "-5.053",
+      "0.209",
+      "-5.465",
+      "-4.641",
+      "0.001",
+      "0.885",
+      "1.505",
+      "-1.235",
+      "0.449",
+      "-2.119",
+      "-0.350",
+      "0.006",
+      "7.5%",
+      "0.880",
+      "1.535"
+    ],
+    "ungroundedIntegers": [
+      "12",
+      "240",
+      "18",
+      "222",
+      "123",
+      "99",
+      "95"
+    ],
+    "irreproducibleNodeCount": 0,
+    "readinessScore": 0.48571428571428565,
+    "ready": false
+  },
+  "failures": [
+    "readiness failed"
+  ]
+}
+
+
+Codex+Nullius verify:
+{
+  "ok": true,
+  "gate": "all",
+  "readiness": {
+    "blankBody": false,
+    "foundSections": 7,
+    "requiredSections": 7,
+    "supportedClaims": 2,
+    "totalNodeCount": 0,
+    "reviewedNodeCount": 0,
+    "openMarkers": 0,
+    "criticalCount": 0,
+    "executableErrorCount": 0,
+    "staleSupportRefCount": 0,
+    "orphanResultClaimCount": 0,
+    "approvedUnappliedPatchCount": 0,
+    "pendingPatchCount": 0,
+    "rejectedClaimPatchCount": 0,
+    "missingArtifactCount": 0,
+    "unverifiedCitationRefCount": 0,
+    "internalLeakTerms": [],
+    "unapprovedAmendmentCount": 0,
+    "ungroundedResultNumbers": [],
+    "ungroundedIntegers": [],
+    "irreproducibleNodeCount": 0,
+    "readinessScore": 0.9999999999999999,
+    "ready": true
+  },
+  "failures": []
+}

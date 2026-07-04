@@ -1,0 +1,55 @@
+{
+  "ok": false,
+  "gate": "all",
+  "readiness": {
+    "blankBody": false,
+    "foundSections": 5,
+    "requiredSections": 7,
+    "supportedClaims": 0,
+    "totalNodeCount": 0,
+    "reviewedNodeCount": 0,
+    "openMarkers": 0,
+    "criticalCount": 0,
+    "executableErrorCount": 0,
+    "staleSupportRefCount": 0,
+    "orphanResultClaimCount": 0,
+    "approvedUnappliedPatchCount": 0,
+    "pendingPatchCount": 0,
+    "rejectedClaimPatchCount": 0,
+    "missingArtifactCount": 0,
+    "unverifiedCitationRefCount": 0,
+    "internalLeakTerms": [],
+    "unapprovedAmendmentCount": 0,
+    "ungroundedResultNumbers": [
+      "1.5142",
+      "2.9988",
+      "0.9999",
+      "0.00",
+      "19.50",
+      "1.5800",
+      "60.0069",
+      "3.00",
+      "99.99%",
+      "0.0043",
+      "2.9901",
+      "3.0075",
+      "0.0485",
+      "1.4159",
+      "1.6124",
+      "0.1564",
+      "0.2804",
+      "1.5"
+    ],
+    "ungroundedIntegers": [
+      "40",
+      "95",
+      "38"
+    ],
+    "irreproducibleNodeCount": 0,
+    "readinessScore": 0.4214285714285715,
+    "ready": false
+  },
+  "failures": [
+    "readiness failed"
+  ]
+}

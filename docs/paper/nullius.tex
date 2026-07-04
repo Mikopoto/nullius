@@ -197,7 +197,7 @@ The architecture above was first realized as a native macOS application. To make
 
 The execution substrate gained a notable property in translation. The default sandbox is now \emph{WebAssembly}\footnote{WebAssembly (WASM) is a portable binary format executed inside a memory-isolated virtual machine. Code compiled to WASM can only touch the outside world through functions the host explicitly provides.}: generated Python runs on a CPython interpreter compiled to WASM (Pyodide), inside a worker thread with a hard timeout. Isolation is not a policy applied to the process but a property of the substrate --- the sandbox exposes no network functions, so exfiltration is not forbidden merely; it is inexpressible. This also removes the last installation barrier: the default path needs no container runtime and works identically on Windows, Linux, and macOS, with the native deny-by-default sandbox and an optional container backend available where full CPython compatibility is required. The refusal principle is preserved: if no sandbox can be established, execution is refused, never silently downgraded.
 
-Two workflow details matter in practice. First, \emph{user data}: files placed in the project's \texttt{data/} folder (or added through the desktop application) are copied read-only into every run's working directory, and the executor role is instructed to base its analysis on them --- absent such files, it must generate the data its plan requires. Second, \emph{automation}: the command-line interface exposes the full loop (\texttt{init}, \texttt{plan}, \texttt{adopt}, \texttt{run}, \texttt{steer}, \texttt{approve}/\texttt{reject}, \texttt{export}), and \texttt{nullius verify --json} emits the complete gate report with a conventional exit code, so a research repository can enforce ``no ungrounded number enters \texttt{main}'' the same way software repositories enforce passing tests. The desktop application layers a supervision surface over the same server: a setup path ordered as keys $\rightarrow$ project $\rightarrow$ plan adoption, a live activity pane that streams every model's output and reasoning tokens as they are produced, staged patches rendered with their gate warnings and approve/reject controls, and a readiness board showing each gate as a light. API keys live in the operating-system keychain or process memory only; they are never written to project files.
+Three workflow details matter in practice. First, \emph{user data}: files placed in the project's \texttt{data/} folder (or added through the desktop application) are copied read-only into every run's working directory, and the executor role is instructed to base its analysis on them --- absent such files, it must generate the data its plan requires. Second, \emph{automation}: the command-line interface exposes the full loop (\texttt{init}, \texttt{plan}, \texttt{adopt}, \texttt{run}, \texttt{steer}, \texttt{approve}/\texttt{reject}, \texttt{export}), and \texttt{nullius verify --json} emits the complete gate report with a conventional exit code, so a research repository can enforce ``no ungrounded number enters \texttt{main}'' the same way software repositories enforce passing tests. Third, \emph{agent supervision}: external coding agents such as Codex, Claude Code, and OpenCode can drive the same CLI without being embedded in the desktop application. Each CLI command appends a structured event to the project's activity journal; the local server tails that journal and streams the events into the desktop live-activity pane. Thus the operator can watch an external agent's verifiable actions --- commands, exit codes, gate results, sandbox failures, readiness changes --- in the GUI even while the agent itself runs in a separate terminal or TUI. The desktop application layers a supervision surface over the same server: a setup path ordered as keys $\rightarrow$ project $\rightarrow$ plan adoption, a live activity pane that streams every model's output and reasoning tokens as they are produced, staged patches rendered with their gate warnings and approve/reject controls, and a readiness board showing each gate as a light. API keys live in the operating-system keychain or process memory only; they are never written to project files.
 
 \section{Case Study: Gated versus Ungated Generation}
 \label{sec:casestudy}
@@ -227,7 +227,79 @@ Machine-checkable verdict & none & \texttt{verify} exit 0, score 1.0 \\
 \label{tab:casestudy}
 \end{table}
 
-Three observations generalize. First, the two routes failed \emph{differently}: the raw call hallucinated the arithmetic itself, while the gated pipeline --- whose arithmetic was real --- decorated correct results with uncomputed statistics. A reader cannot distinguish either failure from the prose. Second, every recovery step was driven by an external signal (an exit code, a reviewer finding, a gate rejection), consistent with the evidence that self-correction without such signals does not converge \cite{huang2024}. Third, the total cost of the gated route was a few additional model calls --- the price of turning ``sounds right'' into ``is traceable'' was measured in cents.
+\paragraph{A second comparison: coding-agent harnesses.}
+The preceding experiment compares a raw API call with the same API accessed through Nullius. A complementary comparison is more relevant to practitioners who already use coding-agent harnesses: \emph{Codex alone} versus \emph{Codex driving the Nullius CLI}. We therefore ran a second small measurement using a 40-row CSV with the same ordinary-least-squares target. The Codex-alone condition used \texttt{codex-cli 0.141.0} with the local default model configuration, \texttt{gpt-5.5} and \texttt{model\_reasoning\_effort=xhigh}. Codex was asked to analyze the CSV and write \texttt{report.md} directly, without Nullius. It executed code and reported the correct fitted values: slope $2.9988$, intercept $1.5142$, and $R^2=0.9999$. However, when that finished report was imported into a blank Nullius project for audit, \texttt{nullius verify --json} returned \texttt{ok: false}, readiness $0.4214$, zero supported claims, 18 ungrounded floating-point quantities, and three ungrounded integers. The report was accurate in this instance, but the accuracy was not a machine-checkable property of the saved research state.
+
+In the second condition, a Codex coding agent used the Nullius CLI locally: \texttt{init} created a project, a saved analysis script regenerated \texttt{artifacts/regression-results.csv}, execution evidence and result claims were recorded in the project ledger, and \texttt{verify --json} was run on the resulting project. The fitted values were the same to the displayed precision: sample size 40, slope $2.998794063977$, intercept $1.514186251220$, and $R^2=0.999922484256$. This time \texttt{verify} returned \texttt{ok: true}, readiness $1.0$, two supported result claims, no ungrounded result numbers, no stale support references, and no missing artifacts. The evaluation artifacts are archived under \texttt{docs/paper/evaluation/}. To avoid disclosing the repository to a second external Codex subprocess, the CLI condition used the current Codex agent driving the public CLI and project files locally; it did not require embedding Codex's TUI in Nullius.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.48\textwidth]{figures/codex-simple-alone-report-snapshot.png}\hfill
+\includegraphics[width=0.48\textwidth]{figures/codex-simple-nullius-report-snapshot.png}
+\caption{Rendered snapshots of the two generated reports for the simple harness comparison. Left: the direct Codex report. Right: the report generated from the Nullius project state. Both reports describe the same fitted line to the displayed precision, but they are different research objects: the left report is a standalone narrative, whereas the right report is a projection from executable evidence and a claim ledger.}
+\label{fig:codex-simple-report-snapshots}
+\end{figure}
+
+The two simple reports differ mostly in their \emph{persistence contract}, not in their scientific conclusion. The Codex-alone report is more expansive as prose: it includes confidence intervals, residual standard error, the largest absolute residual, and a broader limitations paragraph. The Nullius-backed report is more compact and more procedural: it names the saved analysis script and the result artifact used for numeric checking. Both reports state the same fitted relationship to the displayed precision, but only the Nullius-backed report is connected to ledger entries that make the manuscript auditable by \texttt{verify}.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}p{0.25\textwidth}p{0.33\textwidth}p{0.33\textwidth}@{}}
+\toprule
+ & \textbf{Codex alone} & \textbf{Codex + Nullius CLI} \\
+\midrule
+Computed result & $n=40$, slope $2.9988$, intercept $1.5142$, $R^2=0.9999$ & $n=40$, slope $2.998794063977$, intercept $1.514186251220$, $R^2=0.999922484256$ \\
+Saved research state & \texttt{report.md} plus the input CSV; no evidence ledger or claim ledger & project manifest, analysis script, result artifact, source activity, execution evidence, two approved result claims \\
+After-the-fact audit & \texttt{verify} failed: readiness $0.4214$, supported claims 0 & \texttt{verify} passed: readiness $1.0$, supported claims 2 \\
+Numeric grounding & 18 floating-point values and 3 integers ungrounded & 0 ungrounded result numbers, 0 ungrounded integers \\
+Failure signal & Correctness had to be judged by inspecting Codex's transcript and recomputing externally & Correctness was represented as a CLI exit code and a machine-readable readiness report \\
+Interpretation & Codex can solve the task, but the saved report alone is not a verifiable research object & The same agent work becomes a durable, gate-checkable research object \\
+\bottomrule
+\end{tabular}
+\caption{Measured harness-level comparison on the same synthetic regression file. Codex was competent in both conditions; the difference is not model intelligence but whether the finished state contains executable evidence, supported claims, and a deterministic readiness verdict.}
+\label{tab:codexcli}
+\end{table}
+
+\paragraph{Comparison 2: a harder multi-table analysis.}
+To stress the distinction between coding competence and research-state verification, we repeated the harness comparison on a more demanding synthetic task. The input consisted of three CSV files with 240 joined patients, 18 missing 12-week outcomes, baseline covariates, site indicators, treatment, and a high-CRP biomarker flag. The requested analysis required a complete-case join, an adjusted ordinary-least-squares model for \texttt{outcome\_12w} using treatment, baseline score, age, sex, site, and baseline CRP, and a second model with a treatment-by-high-CRP interaction. The Codex-alone run was invoked explicitly as \texttt{codex exec -m gpt-5.5 -c model\_reasoning\_effort=xhigh}. It detected that \texttt{statsmodels} was unavailable, implemented OLS with \texttt{numpy}/\texttt{scipy}, found and corrected an interpretation error in its own draft, then made the saved script pass \texttt{python3 -W error}.
+
+Both conditions therefore reached the same substantive analysis result. The equality is best stated as \emph{same estimates to the reported precision}, not byte-identical prose. The complete-case count ($n=222$), treatment estimate ($-5.053$), standard error ($0.209$), confidence interval ($[-5.465,-4.641]$), $R^2$ ($0.885$), RMSE ($1.505$), and interaction estimate ($-1.235$) matched to the displayed precision. The textual reporting differed only in precision choices: for example, the Codex-alone report wrote the primary $p$-value as $p<0.001$ and the interaction $p$-value as $p=0.006$, whereas the Nullius manuscript reported the same calculations as $p=3.89\times10^{-63}$ and $p=0.006429$.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.48\textwidth]{figures/codex-alone-report-snapshot.png}\hfill
+\includegraphics[width=0.48\textwidth]{figures/codex-nullius-report-snapshot.png}
+\caption{Rendered snapshots of the two generated reports for the harder comparison. Left: the direct Codex report. Right: the report generated from the Nullius project state. The reports are not identical documents, but their substantive estimates agree to the displayed precision; the important difference is that only the right-hand report is backed by a project ledger that \texttt{verify} can certify.}
+\label{fig:codex-report-snapshots}
+\end{figure}
+
+The harder reports show the same pattern under more realistic pressure. The Codex-alone report is again richer as a conventional free-standing manuscript: it spells out the model equations, reference categories, confidence-interval construction, residual degrees of freedom, and several limitations. The Nullius-backed report is shorter and closer to the evidence table: it reports the same cohort counts, coefficients, confidence intervals, $R^2$, and RMSE to the displayed precision, but it uses the exact p-values from the registered artifact and ends with explicit data/code artifact locations. Thus the observed tradeoff is not ``better writing versus worse writing.'' It is that an unconstrained coding agent can write a more discursive report, while Nullius makes the report stricter, less embellished, and easier to audit.
+
+This stronger Codex run is exactly why the distinction matters. Codex did the analysis well and saved useful files, but when the report alone was imported into a blank Nullius project, \texttt{verify} still returned \texttt{ok: false}: readiness $0.4857$, supported claims 0, 15 ungrounded floating-point quantities, and seven ungrounded integers. In this paper, \emph{readiness} is Nullius' deterministic pre-export score: a manuscript is ready only when required sections are present, result claims are supported by accepted evidence, referenced artifacts exist, citations and markers are resolved, and no blocking gate failures remain. Thus a low readiness score does not mean Codex computed the wrong coefficients; it means the saved manuscript is not yet a machine-checkable research object.
+
+In the gated condition, the same analysis script was run inside a Nullius project with warnings promoted to errors, the numeric artifacts were registered as execution evidence, two result claims were linked to that evidence, and the manuscript was written against a gate-readable metric artifact. \texttt{verify --json} returned \texttt{ok: true}, readiness $1.0$, two supported claims, zero ungrounded numbers, and no missing artifacts. For repository-disclosure reasons, this gated condition was driven by the current Codex session using the local Nullius CLI rather than by a second external Codex subprocess granted access to the repository; the recorded commands and artifacts are saved under \texttt{docs/paper/evaluation/}.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}p{0.25\textwidth}p{0.33\textwidth}p{0.33\textwidth}@{}}
+\toprule
+ & \textbf{Codex alone} & \textbf{Codex + Nullius CLI} \\
+\midrule
+Codex settings & \texttt{codex-cli 0.141.0}; model \texttt{gpt-5.5}; effort \texttt{xhigh} & current Codex session driving local Nullius CLI; same analysis script and gate inputs \\
+Task complexity & three-table join, missing outcomes, complete-case filtering, adjusted OLS, interaction model & same task, but outputs had to become evidence, claims, and a gate-passing manuscript \\
+Result values & treatment $-5.053$ (SE $0.209$), 95\% CI $[-5.465,-4.641]$, $R^2=0.885$; interaction $-1.235$ ($p=0.006$) & same displayed values, sourced from a gate-readable metric artifact \\
+Runtime quality check & script ultimately passed \texttt{python3 -W error} after Codex fixed warning and prose issues & execution evidence records warning-as-error execution, exit code 0, artifact hashes, stdout, and stderr \\
+Nullius audit & \texttt{verify} failed: readiness $0.4857$, supported claims 0 & \texttt{verify} passed: readiness $1.0$, supported claims 2 \\
+Numeric grounding & 15 floating-point values and 7 integers ungrounded & 0 ungrounded result numbers, 0 ungrounded integers \\
+\bottomrule
+\end{tabular}
+\caption{Harder harness comparison. Codex alone produced a high-quality analysis and even repaired its own script warnings, but the direct report was still not a gate-checkable research object. Nullius changed the persistence format of the same work, not the intelligence of the operator.}
+\label{tab:codexcli2}
+\end{table}
+
+Four observations generalize. First, the routes failed \emph{differently}: the raw API call hallucinated the arithmetic itself, the ungated Codex harness computed both analyses correctly but left no durable evidence graph behind the prose, and the gated route made the correctness claim a property of the project state. Second, every recovery step in the gated route was driven by an external signal (an exit code, a reviewer finding, a gate rejection), consistent with the evidence that self-correction without such signals does not converge \cite{huang2024}. Third, a strong coding harness can and should remain in the loop: Codex or Claude Code is useful precisely because it can inspect files, repair scripts, and drive commands. Fourth, Nullius' role is narrower and more invariant: it supplies the layer that decides which claims may enter the manuscript.
 
 \section{Limitations and Future Work}
 

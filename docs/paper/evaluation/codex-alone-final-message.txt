@@ -1,0 +1,9 @@
+Created [report.md](/private/tmp/nullius-codex-alone/report.md) with the requested academic sections.
+
+Key fitted values included in the report:
+- Sample size: `n = 40`
+- Slope: `2.9988`
+- Intercept: `1.5142`
+- R-squared: `0.9999`
+
+I computed the regression directly from `data/measurements.csv` using Python/SciPy and did not use Nullius or the nullius CLI.

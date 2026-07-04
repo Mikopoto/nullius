@@ -5,6 +5,9 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import {
   approvePatch,
+  activityFromFullAutoEvent,
+  activityFromStreamEvent,
+  appendActivityEvent,
   checkProjectReproducibility,
   createProject,
   createResearchAgentsFromManifest,
@@ -25,6 +28,7 @@ import {
   savePlan,
   snapshotToGateProject,
   verifyLiteratureItem,
+  type ActivityJournalInput,
   type ProjectManifest
 } from "@nullius/core";
 import { startNulliusServer } from "@nullius/server";
@@ -85,6 +89,13 @@ addModelOptions(initCommand)
       amendments: []
     });
     await createProject(folder, manifest);
+    await recordCliActivity(folder, {
+      role: "system",
+      phase: "init.completed",
+      title: "Project initialized",
+      detail: manifest.question,
+      command: "init"
+    });
     process.stdout.write(`Created Nullius project at ${folder}\n`);
   });
 
@@ -96,14 +107,26 @@ program
   .option("--depth <depth>", "quick, standard, or deep")
   .option("--gate <gate>", "numbers, citations, repro, or all", "all")
   .action(async (folder: string, options: { json?: boolean; depth?: "quick" | "standard" | "deep"; gate?: "numbers" | "citations" | "repro" | "all" }) => {
-    const snapshot = await loadProject(folder);
-    const depth = options.depth ?? snapshot.manifest.settings.depth;
-    const report = readinessReport(snapshotToGateProject(snapshot), depth, projectGateIO(folder));
-    const gate = options.gate ?? "all";
-    const gateStatus = gateResult(gate, report);
-    const result = { ok: gateStatus.ok, gate, readiness: report, failures: gateStatus.failures };
-    process.stdout.write(options.json ? `${JSON.stringify(result, null, 2)}\n` : `${gateStatus.ok ? "Ready" : "Not ready"} (${gate}; ${Math.round(report.readinessScore * 100)}%)\n`);
-    if (!gateStatus.ok) process.exitCode = 1;
+    await withCliActivity(folder, "verify", "Verify gates", async () => {
+      const snapshot = await loadProject(folder);
+      const depth = options.depth ?? snapshot.manifest.settings.depth;
+      const report = readinessReport(snapshotToGateProject(snapshot), depth, projectGateIO(folder));
+      const gate = options.gate ?? "all";
+      const gateStatus = gateResult(gate, report);
+      const result = { ok: gateStatus.ok, gate, readiness: report, failures: gateStatus.failures };
+      await recordCliActivity(folder, {
+        source: "gate",
+        role: "system",
+        phase: "verify.result",
+        title: gateStatus.ok ? "Gates passed" : "Gates not ready",
+        detail: `${gate}; readiness=${Math.round(report.readinessScore * 100)}%; failures=${gateStatus.failures.join("; ") || "none"}`,
+        severity: gateStatus.ok ? "ok" : "warning",
+        command: "verify",
+        exitCode: gateStatus.ok ? 0 : 1
+      });
+      process.stdout.write(options.json ? `${JSON.stringify(result, null, 2)}\n` : `${gateStatus.ok ? "Ready" : "Not ready"} (${gate}; ${Math.round(report.readinessScore * 100)}%)\n`);
+      if (!gateStatus.ok) process.exitCode = 1;
+    });
   });
 
 program
@@ -116,30 +139,47 @@ program
   .option("--mock", "use deterministic local mock agents instead of configured models")
   .option("--fabricated", "test mode: make the synthesizer fabricate a result")
   .action(async (folder: string, options: { fabricated?: boolean; mock?: boolean; lanes?: string; depth?: "quick" | "standard" | "deep"; backend?: "auto" | "pyodide" | "sandboxExec" | "docker" }) => {
-    const snapshot = await loadProject(folder);
-    if (options.depth && snapshot.manifest.settings.depth !== options.depth) {
-      snapshot.manifest.settings.depth = options.depth;
-      await saveManifest(folder, snapshot.manifest);
-    }
-    const lanes = Math.max(1, Number(options.lanes ?? snapshot.manifest.settings.maxLanes ?? 1));
-    let ready = false;
-    let lastRunId = "";
-    for (let index = 0; index < lanes; index += 1) {
-      const result = await new FullAutoOrchestrator({ backend: executionBackendFor(options.backend ?? "auto") }).runOnce(
-        folder,
-        options.mock || options.fabricated
-          ? new MockResearchAgents({ fabricated: Boolean(options.fabricated) })
-          : createResearchAgentsFromManifest(snapshot.manifest, { env: await envWithKeychain() }),
-        (event) => {
-          process.stdout.write(`#${event.seq} ${event.role} ${event.kind}: ${event.title}\n`);
-        }
-      );
-      ready = result.ready;
-      lastRunId = result.runId;
-      if (ready) break;
-    }
-    process.stdout.write(`Run ${lastRunId} completed: ${ready ? "ready" : "not ready"}\n`);
-    if (!ready) process.exitCode = 1;
+    await withCliActivity(folder, "run", "Full Auto run", async () => {
+      const snapshot = await loadProject(folder);
+      if (options.depth && snapshot.manifest.settings.depth !== options.depth) {
+        snapshot.manifest.settings.depth = options.depth;
+        await saveManifest(folder, snapshot.manifest);
+      }
+      const lanes = Math.max(1, Number(options.lanes ?? snapshot.manifest.settings.maxLanes ?? 1));
+      let ready = false;
+      let lastRunId = "";
+      for (let index = 0; index < lanes; index += 1) {
+        const result = await new FullAutoOrchestrator({ backend: executionBackendFor(options.backend ?? "auto") }).runOnce(
+          folder,
+          options.mock || options.fabricated
+            ? new MockResearchAgents({ fabricated: Boolean(options.fabricated) })
+            : createResearchAgentsFromManifest(snapshot.manifest, { env: await envWithKeychain() }),
+          (event) => {
+            process.stdout.write(`#${event.seq} ${event.role} ${event.kind}: ${event.title}\n`);
+            void appendActivityEvent(folder, activityFromFullAutoEvent(folder, event, { source: "cli", actor: "external-agent", command: "run" }));
+          },
+          {
+            onStream: (event) => {
+              void appendActivityEvent(folder, activityFromStreamEvent(folder, event, { source: "cli", actor: "external-agent", command: "run" }));
+            }
+          }
+        );
+        ready = result.ready;
+        lastRunId = result.runId;
+        if (ready) break;
+      }
+      await recordCliActivity(folder, {
+        role: "system",
+        phase: "run.result",
+        title: ready ? "Full Auto completed" : "Full Auto completed: not ready",
+        detail: `runId=${lastRunId}`,
+        severity: ready ? "ok" : "warning",
+        command: "run",
+        exitCode: ready ? 0 : 1
+      });
+      process.stdout.write(`Run ${lastRunId} completed: ${ready ? "ready" : "not ready"}\n`);
+      if (!ready) process.exitCode = 1;
+    });
   });
 
 program
@@ -159,13 +199,22 @@ const modelsCommand = program
 
 addModelOptions(modelsCommand)
   .action(async (folder: string, options: ModelOptions) => {
-    const snapshot = await loadProject(folder);
-    const updatedRoles = applyModelOptions(snapshot.manifest.roles, options);
-    if (hasModelOptions(options)) {
-      await saveManifest(folder, { ...snapshot.manifest, roles: updatedRoles });
-      process.stdout.write(`Updated model settings in ${folder}/nullius.json\n`);
-    }
-    printRoles(updatedRoles);
+    await withCliActivity(folder, "models", "Model settings", async () => {
+      const snapshot = await loadProject(folder);
+      const updatedRoles = applyModelOptions(snapshot.manifest.roles, options);
+      if (hasModelOptions(options)) {
+        await saveManifest(folder, { ...snapshot.manifest, roles: updatedRoles });
+        await recordCliActivity(folder, {
+          role: "system",
+          phase: "models.updated",
+          title: "Model settings updated",
+          detail: `planner=${updatedRoles.planner.model}; executor=${updatedRoles.executor.model}; reviewer=${updatedRoles.reviewer.model}`,
+          command: "models"
+        });
+        process.stdout.write(`Updated model settings in ${folder}/nullius.json\n`);
+      }
+      printRoles(updatedRoles);
+    });
   });
 
 program
@@ -186,9 +235,21 @@ program
   .argument("<patchId>", "patch id")
   .argument("[folder]", "project folder", ".")
   .action(async (patchId: string, folder: string) => {
-    const result = await approvePatch(folder, patchId);
-    process.stdout.write(result.applied ? `Applied patch ${patchId}\n` : `Patch ${patchId} not applied: ${result.reason ?? "blocked"}\n`);
-    if (!result.applied) process.exitCode = 1;
+    await withCliActivity(folder, "approve", "Approve patch", async () => {
+      const result = await approvePatch(folder, patchId);
+      await recordCliActivity(folder, {
+        source: "gate",
+        role: "user",
+        phase: "patch.approve.result",
+        title: result.applied ? "Patch applied" : "Patch approval blocked",
+        detail: result.applied ? patchId : result.reason ?? patchId,
+        severity: result.applied ? "ok" : "warning",
+        command: "approve",
+        exitCode: result.applied ? 0 : 1
+      });
+      process.stdout.write(result.applied ? `Applied patch ${patchId}\n` : `Patch ${patchId} not applied: ${result.reason ?? "blocked"}\n`);
+      if (!result.applied) process.exitCode = 1;
+    });
   });
 
 program
@@ -197,8 +258,10 @@ program
   .argument("<patchId>", "patch id")
   .argument("[folder]", "project folder", ".")
   .action(async (patchId: string, folder: string) => {
-    await rejectPatch(folder, patchId);
-    process.stdout.write(`Rejected patch ${patchId}\n`);
+    await withCliActivity(folder, "reject", "Reject patch", async () => {
+      await rejectPatch(folder, patchId);
+      process.stdout.write(`Rejected patch ${patchId}\n`);
+    });
   });
 
 program
@@ -207,10 +270,19 @@ program
   .argument("<instruction>", "instruction text")
   .argument("[folder]", "project folder", ".")
   .action(async (instruction: string, folder: string) => {
-    const runtime = join(folder, "runtime");
-    await mkdir(runtime, { recursive: true });
-    await writeFile(join(runtime, "steering.txt"), `${instruction}\n`, "utf8");
-    process.stdout.write("Saved steering instruction\n");
+    await withCliActivity(folder, "steer", "Steering instruction", async () => {
+      const runtime = join(folder, "runtime");
+      await mkdir(runtime, { recursive: true });
+      await writeFile(join(runtime, "steering.txt"), `${instruction}\n`, "utf8");
+      await recordCliActivity(folder, {
+        role: "user",
+        phase: "steer.saved",
+        title: "Steering instruction saved",
+        detail: instruction,
+        command: "steer"
+      });
+      process.stdout.write("Saved steering instruction\n");
+    });
   });
 
 program
@@ -219,24 +291,34 @@ program
   .argument("<format>", "md or pdf")
   .argument("[folder]", "project folder", ".")
   .action(async (format: string, folder: string) => {
-    if (format !== "md" && format !== "pdf") {
-      process.stderr.write("Only md is implemented; pdf requires a later Quarto/Pandoc integration.\n");
-      process.exitCode = 2;
-      return;
-    }
-    if (format === "pdf") {
-      const out = join(folder, "manuscript", "report.pdf");
-      const exitCode = await runProcess("quarto", ["render", join(folder, "manuscript", "report.md"), "--to", "pdf", "--output", "report.pdf"], folder);
-      if (exitCode !== 0) {
-        process.stderr.write("PDF export requires Quarto/Pandoc and a valid LaTeX environment.\n");
-        process.exitCode = exitCode || 2;
+    await withCliActivity(folder, "export", `Export ${format}`, async () => {
+      if (format !== "md" && format !== "pdf") {
+        process.stderr.write("Only md is implemented; pdf requires a later Quarto/Pandoc integration.\n");
+        process.exitCode = 2;
         return;
       }
-      await access(out);
-      process.stdout.write(`${out}\n`);
-      return;
-    }
-    process.stdout.write(await exportMarkdown(folder));
+      if (format === "pdf") {
+        const out = join(folder, "manuscript", "report.pdf");
+        const exitCode = await runProcess("quarto", ["render", join(folder, "manuscript", "report.md"), "--to", "pdf", "--output", "report.pdf"], folder);
+        if (exitCode !== 0) {
+          process.stderr.write("PDF export requires Quarto/Pandoc and a valid LaTeX environment.\n");
+          process.exitCode = exitCode || 2;
+          return;
+        }
+        await access(out);
+        process.stdout.write(`${out}\n`);
+        return;
+      }
+      const body = await exportMarkdown(folder);
+      await recordCliActivity(folder, {
+        role: "system",
+        phase: "export.markdown.result",
+        title: "Markdown exported",
+        detail: `${body.length} characters`,
+        command: "export"
+      });
+      process.stdout.write(body);
+    });
   });
 
 program
@@ -245,10 +327,19 @@ program
   .argument("[folder]", "project folder", ".")
   .option("--mock", "use deterministic local mock planner")
   .action(async (folder: string, options: { mock?: boolean }) => {
-    const snapshot = await loadProject(folder);
-    const plan = await (options.mock ? new MockResearchAgents() : createResearchAgentsFromManifest(snapshot.manifest, { env: await envWithKeychain() })).createPlan(snapshot.manifest.question);
-    await savePlan(folder, plan);
-    process.stdout.write(`${plan.id}\t${plan.title}\n`);
+    await withCliActivity(folder, "plan", "Generate plan", async () => {
+      const snapshot = await loadProject(folder);
+      const plan = await (options.mock ? new MockResearchAgents() : createResearchAgentsFromManifest(snapshot.manifest, { env: await envWithKeychain() })).createPlan(snapshot.manifest.question);
+      await savePlan(folder, plan);
+      await recordCliActivity(folder, {
+        role: "planner",
+        phase: "plan.generated",
+        title: "Plan generated",
+        detail: plan.title,
+        command: "plan"
+      });
+      process.stdout.write(`${plan.id}\t${plan.title}\n`);
+    });
   });
 
 program
@@ -257,29 +348,38 @@ program
   .argument("<planId>", "plan id")
   .argument("[folder]", "project folder", ".")
   .action(async (planId: string, folder: string) => {
-    const snapshot = await loadProject(folder);
-    const plan = snapshot.plans.find((candidate) => candidate.id === planId);
-    if (!plan) {
-      process.stderr.write(`Plan not found: ${planId}\n`);
-      process.exitCode = 1;
-      return;
-    }
-    const adopted = { ...plan, approved: true };
-    await savePlan(folder, adopted);
-    if (!snapshot.manifest.protocolLock) {
-      snapshot.manifest.protocolLock = {
-        researchQuestion: snapshot.manifest.question,
-        scope: adopted.purpose,
-        plannedObservables: adopted.observables,
-        successCriteria: adopted.successCriteria,
-        falsificationCriteria: adopted.falsificationCriteria,
-        requiredEvidence: ["approved evidence for every result claim"],
-        exclusions: ["unsupported claims"],
-        lockedAt: new Date().toISOString()
-      };
-      await saveManifest(folder, snapshot.manifest);
-    }
-    process.stdout.write(`Adopted plan ${planId}\n`);
+    await withCliActivity(folder, "adopt", "Adopt plan", async () => {
+      const snapshot = await loadProject(folder);
+      const plan = snapshot.plans.find((candidate) => candidate.id === planId);
+      if (!plan) {
+        process.stderr.write(`Plan not found: ${planId}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      const adopted = { ...plan, approved: true };
+      await savePlan(folder, adopted);
+      if (!snapshot.manifest.protocolLock) {
+        snapshot.manifest.protocolLock = {
+          researchQuestion: snapshot.manifest.question,
+          scope: adopted.purpose,
+          plannedObservables: adopted.observables,
+          successCriteria: adopted.successCriteria,
+          falsificationCriteria: adopted.falsificationCriteria,
+          requiredEvidence: ["approved evidence for every result claim"],
+          exclusions: ["unsupported claims"],
+          lockedAt: new Date().toISOString()
+        };
+        await saveManifest(folder, snapshot.manifest);
+      }
+      await recordCliActivity(folder, {
+        role: "user",
+        phase: "plan.adopted",
+        title: "Plan adopted",
+        detail: adopted.title,
+        command: "adopt"
+      });
+      process.stdout.write(`Adopted plan ${planId}\n`);
+    });
   });
 
 const citations = program.command("citations").description("Manage literature verification");
@@ -289,10 +389,23 @@ citations
   .description("Verify project literature records")
   .argument("[folder]", "project folder", ".")
   .action(async (folder: string) => {
-    const snapshot = await loadProject(folder);
-    const literature = await Promise.all(snapshot.literature.map((item) => verifyLiteratureItem(item)));
-    await saveLiterature(folder, literature);
-    process.stdout.write(`${JSON.stringify({ ok: true, literature }, null, 2)}\n`);
+    await withCliActivity(folder, "citations.verify", "Verify citations", async () => {
+      const snapshot = await loadProject(folder);
+      const literature = await Promise.all(snapshot.literature.map((item) => verifyLiteratureItem(item)));
+      await saveLiterature(folder, literature);
+      const rejected = literature.filter((item) => item.status === "rejected" || item.status === "retracted").length;
+      await recordCliActivity(folder, {
+        source: "gate",
+        role: "system",
+        phase: "citations.verify.result",
+        title: rejected > 0 ? "Citation verification found issues" : "Citations verified",
+        detail: `${literature.length} literature item(s), ${rejected} rejected/retracted`,
+        severity: rejected > 0 ? "warning" : "ok",
+        command: "citations.verify",
+        exitCode: rejected > 0 ? 1 : 0
+      });
+      process.stdout.write(`${JSON.stringify({ ok: true, literature }, null, 2)}\n`);
+    });
   });
 
 citations
@@ -310,9 +423,21 @@ program
   .description("Summarize reproducibility status")
   .argument("[folder]", "project folder", ".")
   .action(async (folder: string) => {
-    const result = await checkProjectReproducibility(folder);
-    process.stdout.write(`${JSON.stringify({ ok: result.failed === 0 && result.divergent === 0, ...result }, null, 2)}\n`);
-    if (result.failed > 0 || result.divergent > 0) process.exitCode = 1;
+    await withCliActivity(folder, "repro", "Check reproducibility", async () => {
+      const result = await checkProjectReproducibility(folder);
+      await recordCliActivity(folder, {
+        source: "sandbox",
+        role: "system",
+        phase: "repro.result",
+        title: result.failed === 0 && result.divergent === 0 ? "Reproducibility check passed" : "Reproducibility check found issues",
+        detail: `failed=${result.failed}; divergent=${result.divergent}`,
+        severity: result.failed === 0 && result.divergent === 0 ? "ok" : "warning",
+        command: "repro",
+        exitCode: result.failed === 0 && result.divergent === 0 ? 0 : 1
+      });
+      process.stdout.write(`${JSON.stringify({ ok: result.failed === 0 && result.divergent === 0, ...result }, null, 2)}\n`);
+      if (result.failed > 0 || result.divergent > 0) process.exitCode = 1;
+    });
   });
 
 program
@@ -321,7 +446,22 @@ program
   .argument("<nodeId>", "node id")
   .argument("[folder]", "project folder", ".")
   .action(async (nodeId: string, folder: string) => {
-    process.stdout.write(`${JSON.stringify(await rerunNode(folder, nodeId), null, 2)}\n`);
+    await withCliActivity(folder, "rerun", "Rerun node", async () => {
+      const result = await rerunNode(folder, nodeId);
+      const ok = typeof result === "object" && result !== null && "ok" in result ? Boolean((result as { ok?: boolean }).ok) : false;
+      await recordCliActivity(folder, {
+        source: "sandbox",
+        role: "executor",
+        phase: "rerun.result",
+        title: ok ? "Node rerun completed" : "Node rerun failed",
+        detail: nodeId,
+        severity: ok ? "ok" : "critical",
+        command: "rerun",
+        exitCode: ok ? 0 : 1
+      });
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      if (!ok) process.exitCode = 1;
+    });
   });
 
 program
@@ -375,6 +515,58 @@ keys
   });
 
 program.parse();
+
+type CliActivityInput = Omit<ActivityJournalInput, "source" | "actor"> & Partial<Pick<ActivityJournalInput, "source" | "actor">>;
+
+async function recordCliActivity(folder: string, input: CliActivityInput): Promise<void> {
+  const { source, actor, ...rest } = input;
+  await appendActivityEvent(folder, {
+    ...rest,
+    source: source ?? "cli",
+    actor: actor ?? "external-agent"
+  });
+}
+
+async function withCliActivity(folder: string, command: string, title: string, work: () => Promise<void>): Promise<void> {
+  await recordCliActivity(folder, {
+    role: "system",
+    phase: `${command}.started`,
+    title,
+    command
+  });
+  try {
+    await work();
+    const exitCode = numericExitCode();
+    await recordCliActivity(folder, {
+      role: "system",
+      phase: `${command}.completed`,
+      title: exitCode === 0 ? `${title} completed` : `${title} completed with issues`,
+      severity: exitCode === 0 ? "ok" : "warning",
+      command,
+      exitCode
+    });
+  } catch (error) {
+    await recordCliActivity(folder, {
+      role: "system",
+      phase: `${command}.failed`,
+      title: `${title} failed`,
+      detail: error instanceof Error ? error.message : String(error),
+      severity: "critical",
+      command,
+      exitCode: 1
+    });
+    throw error;
+  }
+}
+
+function numericExitCode(): number {
+  if (typeof process.exitCode === "number") return process.exitCode;
+  if (typeof process.exitCode === "string") {
+    const parsed = Number(process.exitCode);
+    return Number.isFinite(parsed) ? parsed : 1;
+  }
+  return 0;
+}
 
 function addModelOptions(command: Command): Command {
   return command

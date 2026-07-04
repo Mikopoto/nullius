@@ -1,0 +1,10 @@
+metric,value
+sample_size,40
+slope,2.998794063977
+intercept,1.514186251220
+r_squared,0.999922484256
+x_min,0.00
+x_max,19.50
+y_min,1.5800
+y_max,60.0069
+

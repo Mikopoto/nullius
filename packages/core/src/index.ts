@@ -15,3 +15,4 @@ export * from "./store/patchActions.js";
 export * from "./transcript/runTranscript.js";
 export * from "./orchestrator/fullAuto.js";
 export * from "./orchestrator/agents.js";
+export * from "./activity/activityJournal.js";

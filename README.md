@@ -7,7 +7,7 @@
 - Manuscript patches with any blocking warning are rejected **before** they are written, even in fully autonomous runs.
 - Three model roles (planner / executor / reviewer), independently configurable, watch each other; a live console streams every token and reasoning trace.
 
-Does it matter? In the bundled case study, the same `gpt-4o-mini` asked directly about a 40-point dataset reported a regression slope of **1.9450** (truth: 3.0, a 35% error) with a confident R². Through Nullius, the same model produced a sandbox-executed slope of **3.0007**, and its one attempt to embellish the manuscript with statistics it never computed was blocked at the write boundary. See the paper: [`docs/paper/nullius.pdf`](docs/paper/nullius.pdf) and raw logs in [`docs/paper/evaluation/`](docs/paper/evaluation/).
+Does it matter? In the bundled case study, the same `gpt-4o-mini` asked directly about a 40-point dataset reported a regression slope of **1.9450** (truth: 3.0, a 35% error) with a confident R². Through Nullius, the same model produced a sandbox-executed slope of **3.0007**, and its one attempt to embellish the manuscript with statistics it never computed was blocked at the write boundary. The paper also includes two measured **Codex vs Codex + Nullius CLI** comparisons using `codex-cli 0.141.0`, `gpt-5.5`, and `model_reasoning_effort=xhigh`: Codex computed the analyses correctly, but direct reports failed Nullius audit because they were not saved as evidence-backed research objects. See the paper: [`docs/paper/nullius.pdf`](docs/paper/nullius.pdf) and raw logs in [`docs/paper/evaluation/`](docs/paper/evaluation/).
 
 ## Install
 
@@ -26,7 +26,7 @@ git clone https://github.com/Mikopoto/nullius.git
 cd nullius
 pnpm install
 pnpm build              # builds core, CLI, server, and the web UI
-pnpm test               # 88 tests should pass
+pnpm test               # 90 tests should pass
 
 # CLI is ready now:
 node packages/cli/dist/index.js --help
@@ -149,6 +149,8 @@ Instructions for your agent:
 ```
 
 The agent never needs your API keys (they stay in the OS keychain), cannot write to the manuscript directly (only gated patches can), and the human approval step (`adopt`) stays yours if you want it to.
+
+If the desktop GUI is open on the same project while an external agent runs these commands, the **Live Activity** pane tails `<project>/runtime/events.jsonl` and updates in real time. You can watch CLI starts/completions, gate failures, sandbox execution, reviewer events, latest readiness, and exit codes without embedding the agent's TUI. Use **Copy Agent Handoff** in the GUI to copy a ready-to-paste prompt and command list for Codex, Claude Code, OpenCode, or another terminal agent.
 
 ## How it is built
 

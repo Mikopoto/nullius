@@ -7,6 +7,9 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { z } from "zod";
 import {
   approvePatch,
+  activityFromFullAutoEvent,
+  activityFromStreamEvent,
+  appendActivityEvent,
   checkProjectReproducibility,
   createProject,
   createResearchAgentsFromManifest,
@@ -21,6 +24,7 @@ import {
   ProjectManifestSchema,
   readinessReport,
   rejectPatch,
+  readActivityEvents,
   saveLane,
   saveLiterature,
   saveManifest,
@@ -28,6 +32,8 @@ import {
   savePlan,
   snapshotToGateProject,
   verifyLiteratureItem,
+  type ActivityJournalEvent,
+  type ActivityJournalInput,
   type FullAutoEvent
 } from "@nullius/core";
 
@@ -54,7 +60,9 @@ export const ServerCommandSchema = z.object({
     "keys.status",
     "data.import",
     "data.list",
-    "project.configure"
+    "project.configure",
+    "activity.watch",
+    "activity.list"
   ]),
   payload: z.unknown().optional()
 });
@@ -144,6 +152,7 @@ const KeysSetPayload = z.object({
 export async function startNulliusServer(options: { port?: number } = {}): Promise<NulliusServer> {
   const clients = new Set<WebSocket>();
   const activeRuns = new Map<string, AbortController>();
+  const activityWatchers = new Map<string, { seen: Set<string>; timer: ReturnType<typeof setInterval> }>();
   // Keys entered through the GUI on platforms without a supported OS keychain
   // live only in this process; they are never written to disk.
   const sessionKeys = new Map<string, string>();
@@ -164,6 +173,51 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
     }
   };
 
+  const activityEventKey = (event: ActivityJournalEvent): string => `${event.seq}:${event.ts}:${event.source}:${event.phase}:${event.title}`;
+
+  const markActivitySeen = (root: string, event: ActivityJournalEvent) => {
+    const watcher = activityWatchers.get(root);
+    if (watcher) watcher.seen.add(activityEventKey(event));
+  };
+
+  const broadcastActivity = (event: ActivityJournalEvent) => {
+    markActivitySeen(event.projectRoot, event);
+    broadcast({ schemaVersion: 1, type: "activity.event", event });
+  };
+
+  const recordActivity = async (root: string, input: ActivityJournalInput): Promise<ActivityJournalEvent> => {
+    const event = await appendActivityEvent(root, input);
+    broadcastActivity(event);
+    return event;
+  };
+
+  const startActivityWatch = async (root: string): Promise<ActivityJournalEvent[]> => {
+    const existing = await readActivityEvents(root, { limit: 500 });
+    const active = activityWatchers.get(root);
+    if (active) {
+      for (const event of existing) active.seen.add(activityEventKey(event));
+      return existing;
+    }
+    const seen = new Set(existing.map(activityEventKey));
+    const watcher = {
+      seen,
+      timer: setInterval(() => {
+        void (async () => {
+          const events = await readActivityEvents(root, { limit: 1000 });
+          const next = events.filter((event) => !watcher.seen.has(activityEventKey(event))).sort((a, b) => a.seq - b.seq || a.ts.localeCompare(b.ts));
+          if (next.length === 0) return;
+          for (const event of next) {
+            watcher.seen.add(activityEventKey(event));
+            broadcastActivity(event);
+          }
+          await broadcastStateChanged("activity.watch", root);
+        })().catch(() => undefined);
+      }, 500)
+    };
+    activityWatchers.set(root, watcher);
+    return existing;
+  };
+
   const broadcastStateChanged = async (commandName: string, root: string) => {
     let readiness;
     try {
@@ -181,6 +235,15 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
       case "project.create": {
         const payload = CreateProjectPayload.parse(parsed.payload);
         await createProject(payload.root, payload.manifest);
+        await recordActivity(payload.root, {
+          source: "gui",
+          actor: "gui",
+          role: "system",
+          phase: "project.create.completed",
+          title: "Project created",
+          detail: payload.manifest.question,
+          command: parsed.command
+        });
         await broadcastStateChanged(parsed.command, payload.root);
         return { ok: true };
       }
@@ -191,13 +254,33 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
       case "gates.verify": {
         const payload = VerifyPayload.parse(parsed.payload);
         const snapshot = await loadProject(payload.root);
-        return { ok: true, readiness: readinessReport(snapshotToGateProject(snapshot), payload.depth, projectGateIO(payload.root)) };
+        const readiness = readinessReport(snapshotToGateProject(snapshot), payload.depth, projectGateIO(payload.root));
+        await recordActivity(payload.root, {
+          source: "gate",
+          actor: "gui",
+          role: "system",
+          phase: "gates.verify.completed",
+          title: readiness.ready ? "Gates passed" : "Gates not ready",
+          detail: `readiness=${Math.round(readiness.readinessScore * 100)}%`,
+          severity: readiness.ready ? "ok" : "warning",
+          command: parsed.command,
+          exitCode: readiness.ready ? 0 : 1
+        });
+        return { ok: true, readiness };
       }
       case "run.start": {
         const payload = RunPayload.parse(parsed.payload);
         const snapshot = await loadProject(payload.root);
         const controller = new AbortController();
         activeRuns.set(payload.root, controller);
+        await recordActivity(payload.root, {
+          source: "gui",
+          actor: "gui",
+          role: "system",
+          phase: "run.start.started",
+          title: "Full Auto started",
+          command: parsed.command
+        });
         const result = await new FullAutoOrchestrator({ backend: executionBackendFor(payload.backend) }).runOnce(
           payload.root,
           payload.mock || payload.mockFabricated
@@ -205,14 +288,29 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
             : createResearchAgentsFromManifest(snapshot.manifest, { env: await resolveAgentEnv() }),
           (event: FullAutoEvent) => {
             broadcast({ schemaVersion: 1, type: "run.event", event });
+            void recordActivity(payload.root, activityFromFullAutoEvent(payload.root, event, { source: "gui", actor: "gui", command: parsed.command }));
             if (event.kind === "intervention.required") broadcast({ schemaVersion: 1, type: "intervention.required", event, root: payload.root });
           },
           {
             signal: controller.signal,
-            onStream: (event) => broadcast({ schemaVersion: 1, type: "stream.delta", ...event, root: payload.root })
+            onStream: (event) => {
+              broadcast({ schemaVersion: 1, type: "stream.delta", ...event, root: payload.root });
+              void recordActivity(payload.root, activityFromStreamEvent(payload.root, event, { source: "gui", actor: "gui", command: parsed.command }));
+            }
           }
         );
         activeRuns.delete(payload.root);
+        await recordActivity(payload.root, {
+          source: "gui",
+          actor: "gui",
+          role: "system",
+          phase: "run.start.completed",
+          title: result.ready ? "Full Auto completed" : "Full Auto completed: not ready",
+          severity: result.ready ? "ok" : "warning",
+          command: parsed.command,
+          exitCode: result.ready ? 0 : 1,
+          runId: result.runId
+        });
         await broadcastStateChanged(parsed.command, payload.root);
         return result;
       }
@@ -221,6 +319,14 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
         const snapshot = await loadProject(payload.root);
         const controller = new AbortController();
         activeRuns.set(payload.root, controller);
+        await recordActivity(payload.root, {
+          source: "gui",
+          actor: "gui",
+          role: "system",
+          phase: "run.resume.started",
+          title: "Full Auto resumed",
+          command: parsed.command
+        });
         const result = await new FullAutoOrchestrator({ backend: executionBackendFor(payload.backend) }).runOnce(
           payload.root,
           payload.mock || payload.mockFabricated
@@ -228,14 +334,29 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
             : createResearchAgentsFromManifest(snapshot.manifest, { env: await resolveAgentEnv() }),
           (event: FullAutoEvent) => {
             broadcast({ schemaVersion: 1, type: "run.event", event });
+            void recordActivity(payload.root, activityFromFullAutoEvent(payload.root, event, { source: "gui", actor: "gui", command: parsed.command }));
             if (event.kind === "intervention.required") broadcast({ schemaVersion: 1, type: "intervention.required", event, root: payload.root });
           },
           {
             signal: controller.signal,
-            onStream: (event) => broadcast({ schemaVersion: 1, type: "stream.delta", ...event, root: payload.root })
+            onStream: (event) => {
+              broadcast({ schemaVersion: 1, type: "stream.delta", ...event, root: payload.root });
+              void recordActivity(payload.root, activityFromStreamEvent(payload.root, event, { source: "gui", actor: "gui", command: parsed.command }));
+            }
           }
         );
         activeRuns.delete(payload.root);
+        await recordActivity(payload.root, {
+          source: "gui",
+          actor: "gui",
+          role: "system",
+          phase: "run.resume.completed",
+          title: result.ready ? "Full Auto resumed and completed" : "Full Auto resumed: not ready",
+          severity: result.ready ? "ok" : "warning",
+          command: parsed.command,
+          exitCode: result.ready ? 0 : 1,
+          runId: result.runId
+        });
         await broadcastStateChanged(parsed.command, payload.root);
         return result;
       }
@@ -245,6 +366,14 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
         if (!controller) return { ok: true, stopped: false, reason: "No active run for this project." };
         controller.abort();
         activeRuns.delete(payload.root);
+        await recordActivity(payload.root, {
+          source: "gui",
+          actor: "gui",
+          role: "system",
+          phase: "run.stop.completed",
+          title: "Stop requested",
+          command: parsed.command
+        });
         await broadcastStateChanged(parsed.command, payload.root);
         return { ok: true, stopped: true };
       }
@@ -252,14 +381,40 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
         const payload = SteerPayload.parse(parsed.payload);
         await mkdir(join(payload.root, "runtime"), { recursive: true });
         await writeFile(join(payload.root, "runtime", "steering.txt"), `${payload.instruction}\n`, "utf8");
+        await recordActivity(payload.root, {
+          source: "gui",
+          actor: "gui",
+          role: "user",
+          phase: "run.steer.completed",
+          title: "Steering instruction saved",
+          detail: payload.instruction,
+          command: parsed.command
+        });
         await broadcastStateChanged(parsed.command, payload.root);
         return { ok: true };
       }
       case "plan.generate": {
         const payload = RootPayload.parse(parsed.payload);
         const snapshot = await loadProject(payload.root);
+        await recordActivity(payload.root, {
+          source: "gui",
+          actor: "gui",
+          role: "planner",
+          phase: "plan.generate.started",
+          title: "Generating plan",
+          command: parsed.command
+        });
         const plan = await createResearchAgentsFromManifest(snapshot.manifest, { env: await resolveAgentEnv() }).createPlan(snapshot.manifest.question);
         await savePlan(payload.root, plan);
+        await recordActivity(payload.root, {
+          source: "gui",
+          actor: "gui",
+          role: "planner",
+          phase: "plan.generate.completed",
+          title: "Plan generated",
+          detail: plan.title,
+          command: parsed.command
+        });
         await broadcastStateChanged(parsed.command, payload.root);
         return { ok: true, plan };
       }
@@ -284,24 +439,63 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
           }
         };
         await saveManifest(payload.root, manifest);
+        await recordActivity(payload.root, {
+          source: "gui",
+          actor: "gui",
+          role: "user",
+          phase: "plan.adopt.completed",
+          title: "Plan adopted",
+          detail: adopted.title,
+          command: parsed.command
+        });
         await broadcastStateChanged(parsed.command, payload.root);
         return { ok: true, plan: adopted };
       }
       case "patch.approve": {
         const payload = PatchPayload.parse(parsed.payload);
         const result = await approvePatch(payload.root, payload.patchId);
+        await recordActivity(payload.root, {
+          source: "gate",
+          actor: "gui",
+          role: "user",
+          phase: "patch.approve.completed",
+          title: result.applied ? "Patch applied" : "Patch approval blocked",
+          detail: result.applied ? payload.patchId : result.reason ?? payload.patchId,
+          severity: result.applied ? "ok" : "warning",
+          command: parsed.command,
+          exitCode: result.applied ? 0 : 1
+        });
         await broadcastStateChanged(parsed.command, payload.root);
         return result;
       }
       case "patch.reject": {
         const payload = PatchPayload.parse(parsed.payload);
         const patch = await rejectPatch(payload.root, payload.patchId);
+        await recordActivity(payload.root, {
+          source: "gui",
+          actor: "gui",
+          role: "user",
+          phase: "patch.reject.completed",
+          title: "Patch rejected",
+          detail: patch.id,
+          command: parsed.command
+        });
         await broadcastStateChanged(parsed.command, payload.root);
         return { ok: true, patch };
       }
       case "export.markdown": {
         const payload = RootPayload.parse(parsed.payload);
-        return { body: await exportMarkdown(payload.root) };
+        const body = await exportMarkdown(payload.root);
+        await recordActivity(payload.root, {
+          source: "gui",
+          actor: "gui",
+          role: "system",
+          phase: "export.markdown.completed",
+          title: "Markdown exported",
+          detail: `${body.length} characters`,
+          command: parsed.command
+        });
+        return { body };
       }
       case "data.import": {
         const payload = DataImportPayload.parse(parsed.payload);
@@ -314,6 +508,17 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
           await cp(file, join(dataDir, name), { force: true });
           imported.push(name);
         }
+        await recordActivity(payload.root, {
+          source: "gui",
+          actor: "gui",
+          role: "user",
+          phase: "data.import.completed",
+          title: "Data files imported",
+          detail: imported.join(", ") || "No files imported",
+          severity: imported.length > 0 ? "ok" : "warning",
+          command: parsed.command,
+          exitCode: imported.length > 0 ? 0 : 1
+        });
         await broadcastStateChanged(parsed.command, payload.root);
         return { ok: true, imported, files: await listProjectDataFiles(payload.root) };
       }
@@ -325,6 +530,15 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
         const payload = ProjectConfigurePayload.parse(parsed.payload);
         const snapshot = await loadProject(payload.root);
         await saveManifest(payload.root, { ...snapshot.manifest, roles: payload.roles });
+        await recordActivity(payload.root, {
+          source: "gui",
+          actor: "gui",
+          role: "system",
+          phase: "project.configure.completed",
+          title: "Model settings saved",
+          detail: `planner=${payload.roles.planner.model}; executor=${payload.roles.executor.model}; reviewer=${payload.roles.reviewer.model}`,
+          command: parsed.command
+        });
         await broadcastStateChanged(parsed.command, payload.root);
         return { ok: true };
       }
@@ -367,6 +581,18 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
         const snapshot = await loadProject(payload.root);
         const verified = await Promise.all(snapshot.literature.map((item) => verifyLiteratureItem(item)));
         await saveLiterature(payload.root, verified);
+        const rejected = verified.filter((item) => item.status === "rejected" || item.status === "retracted").length;
+        await recordActivity(payload.root, {
+          source: "gate",
+          actor: "gui",
+          role: "system",
+          phase: "citations.verify.completed",
+          title: rejected > 0 ? "Citation verification found issues" : "Citations verified",
+          detail: `${verified.length} literature item(s), ${rejected} rejected/retracted`,
+          severity: rejected > 0 ? "warning" : "ok",
+          command: parsed.command,
+          exitCode: rejected > 0 ? 1 : 0
+        });
         await broadcastStateChanged(parsed.command, payload.root);
         return { ok: true, literature: verified };
       }
@@ -377,6 +603,17 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
       case "repro.check": {
         const payload = RootPayload.parse(parsed.payload);
         const result = await checkProjectReproducibility(payload.root);
+        await recordActivity(payload.root, {
+          source: "sandbox",
+          actor: "gui",
+          role: "system",
+          phase: "repro.check.completed",
+          title: result.failed === 0 && result.divergent === 0 ? "Reproducibility check passed" : "Reproducibility check found issues",
+          detail: `failed=${result.failed}; divergent=${result.divergent}`,
+          severity: result.failed === 0 && result.divergent === 0 ? "ok" : "warning",
+          command: parsed.command,
+          exitCode: result.failed === 0 && result.divergent === 0 ? 0 : 1
+        });
         await broadcastStateChanged(parsed.command, payload.root);
         return { ok: result.failed === 0 && result.divergent === 0, ...result };
       }
@@ -401,8 +638,30 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
         } as const;
         await saveNode(payload.root, lane.id, updated, [`# ${updated.title}`, "", `Status: ${updated.status}`, "", "```python", updated.generatedCode, "```", "", result.stdout || result.stderr].join("\n"));
         await saveLane(payload.root, { id: lane.id, name: lane.name, planId: lane.planId, nodeOrder: lane.nodeOrder.includes(updated.id) ? lane.nodeOrder : [...lane.nodeOrder, updated.id] });
+        await recordActivity(payload.root, {
+          source: "sandbox",
+          actor: "gui",
+          role: "executor",
+          phase: "node.rerun.completed",
+          title: result.status === "succeeded" ? "Node rerun completed" : "Node rerun failed",
+          detail: updated.title,
+          severity: result.status === "succeeded" ? "ok" : "critical",
+          command: parsed.command,
+          exitCode: result.exitCode
+        });
         await broadcastStateChanged(parsed.command, payload.root);
         return { ok: true, node: updated, execution: result };
+      }
+      case "activity.watch": {
+        const payload = RootPayload.parse(parsed.payload);
+        const events = await startActivityWatch(payload.root);
+        await broadcastStateChanged(parsed.command, payload.root);
+        return { ok: true, events };
+      }
+      case "activity.list": {
+        const payload = RootPayload.parse(parsed.payload);
+        const events = await readActivityEvents(payload.root, { limit: 500 });
+        return { ok: true, events };
       }
     }
   };
@@ -436,6 +695,8 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
     http,
     ws,
     close: async () => {
+      for (const watcher of activityWatchers.values()) clearInterval(watcher.timer);
+      activityWatchers.clear();
       for (const client of clients) client.close();
       ws.close();
       await new Promise<void>((resolve, reject) => http.close((error) => (error ? reject(error) : resolve())));

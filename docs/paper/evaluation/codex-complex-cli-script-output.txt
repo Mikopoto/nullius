@@ -1,0 +1,4 @@
+complete_case_n=222
+missing_outcome_12w_count=18
+treatment_estimate=-5.053125, se=0.208937, p=3.89276e-63
+interaction_estimate=-1.234582, se=0.448572, p=0.00642919

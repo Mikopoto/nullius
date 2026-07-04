@@ -1,0 +1,15 @@
+Done. I wrote the report to [report.md](/private/tmp/nullius-complex-codex-alone/report.md:1) and saved the reproducible script at [scripts/analyze_ols.py](/private/tmp/nullius-complex-codex-alone/scripts/analyze_ols.py:1).
+
+Key outputs:
+- Complete-case N: 222; missing `outcome_12w`: 18
+- Treated/control complete cases: 123 / 99
+- Adjusted treatment estimate: -5.053, SE 0.209, 95% CI -5.465 to -4.641, p<0.001
+- R-squared: 0.885; RMSE: 1.505
+- Treatment-by-`high_crp` interaction: -1.235, SE 0.449, 95% CI -2.119 to -0.350, p=0.006
+
+Artifacts saved:
+- [artifacts/analysis_results.json](/private/tmp/nullius-complex-codex-alone/artifacts/analysis_results.json:1)
+- [artifacts/model_coefficients.csv](/private/tmp/nullius-complex-codex-alone/artifacts/model_coefficients.csv:1)
+- [artifacts/complete_case_data.csv](/private/tmp/nullius-complex-codex-alone/artifacts/complete_case_data.csv:1)
+
+Verified with `python3 -W error scripts/analyze_ols.py`. I did not use Nullius or the nullius CLI.

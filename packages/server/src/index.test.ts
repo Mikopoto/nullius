@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { loadProject } from "@nullius/core";
+import { appendActivityEvent, loadProject } from "@nullius/core";
 import { startNulliusServer } from "./index.js";
 
 function manifest(question = "Does it work?") {
@@ -124,9 +124,7 @@ describe("Nullius server", () => {
         socket.once("open", resolve);
         socket.once("error", reject);
       });
-      const messagePromise = new Promise<Record<string, unknown>>((resolve) => {
-        socket.once("message", (data) => resolve(JSON.parse(String(data)) as Record<string, unknown>));
-      });
+      const messagePromise = waitForSocketMessage(socket, (message) => message.type === "state.changed" && message.command === "project.create");
       await server.command({ schemaVersion: 1, command: "project.create", payload: { root, manifest: manifest() } });
       const message = await messagePromise;
       expect(message).toMatchObject({ type: "state.changed", command: "project.create", root });
@@ -140,4 +138,52 @@ describe("Nullius server", () => {
     }
   });
 
+  it("tails external CLI activity journal events", async () => {
+    const root = await mkdtemp(join(tmpdir(), "nullius-server-activity-"));
+    const server = await startNulliusServer();
+    const socket = new WebSocket(`ws://127.0.0.1:${server.port}`);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once("open", resolve);
+        socket.once("error", reject);
+      });
+      await server.command({ schemaVersion: 1, command: "project.create", payload: { root, manifest: manifest() } });
+      const watch = await server.command({ schemaVersion: 1, command: "activity.watch", payload: { root } }) as { events: Array<{ title: string }> };
+      expect(watch.events.some((event) => event.title === "Project created")).toBe(true);
+      const activityPromise = waitForSocketMessage(socket, (message) => Boolean(message.type === "activity.event" && message.event && typeof message.event === "object" && (message.event as { title?: string }).title === "External verify"));
+      await appendActivityEvent(root, {
+        source: "cli",
+        actor: "external-agent",
+        role: "system",
+        phase: "verify.completed",
+        title: "External verify",
+        detail: "readiness=100%",
+        command: "verify",
+        exitCode: 0
+      });
+      await expect(activityPromise).resolves.toMatchObject({ type: "activity.event", event: { source: "cli", title: "External verify", exitCode: 0 } });
+    } finally {
+      socket.close();
+      await server.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
 });
+
+function waitForSocketMessage(socket: WebSocket, predicate: (message: Record<string, unknown>) => boolean): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off("message", onMessage);
+      reject(new Error("Matching WebSocket message not received"));
+    }, 10_000);
+    const onMessage = (data: WebSocket.RawData) => {
+      const message = JSON.parse(String(data)) as Record<string, unknown>;
+      if (!predicate(message)) return;
+      clearTimeout(timer);
+      socket.off("message", onMessage);
+      resolve(message);
+    };
+    socket.on("message", onMessage);
+  });
+}
