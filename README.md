@@ -178,6 +178,27 @@ The agent never needs your API keys (they stay in the OS keychain), cannot write
 
 If the desktop GUI is open on the same project while an external agent runs these commands, the **Live Activity** pane tails `<project>/runtime/events.jsonl` and updates in real time. You can watch CLI starts/completions, gate failures, sandbox execution, reviewer events, latest readiness, and exit codes without embedding the agent's TUI. Use **Copy Agent Handoff** in the GUI to copy a ready-to-paste prompt and command list for Codex, Claude Code, OpenCode, or another terminal agent.
 
+## Why an agent cannot bluff its way through Nullius
+
+A common misreading: "Nullius makes the agent deterministic." It does not — LLMs stay stochastic. What Nullius does is sharper: **generation stays probabilistic, but judgment is deterministic code, and every exit that bypasses the judgment is closed.** A wrong conclusion can still be *proposed*; it can no longer *enter the record*. The failure mode changes from "silently wrong report" to "visibly blocked patch".
+
+Four closed exits, concretely:
+
+1. **The agent cannot grade its own homework.** Asking an LLM to verify itself does not work: self-correction fails without external signals (Huang et al., ICLR 2024) and LLM judges favor their own output (Panickssery et al., 2024). Nullius's judge is not a model. Whether `0.87` exists in an execution artifact is a value comparison; there is no prompt that argues with it. The agent receives exit 1 and a machine-readable reason (`Number not traceable to any execution artifact: 0.05`) — a signal it can act on but not negotiate with.
+2. **The agent cannot fabricate evidence.** The evidence bank accepts only artifacts written by code that actually ran in the sandbox. Saying "I ran it, p = 0.03" creates nothing; there is no API for asserting evidence, and the sandbox has no network to fetch answers from.
+3. **The agent cannot move the goalposts.** When results disappoint, the classic LLM escape is reinterpreting the success criteria after the fact. Plan adoption freezes observables, success criteria, and falsification criteria before execution; changing them afterwards requires a human-approved amendment.
+4. **The agent cannot touch the manuscript.** The only write path is a gated patch. Even with auto-apply enabled, one blocking warning (untraceable number, unverified citation) rejects the write.
+
+The practical consequence: the agent's research loop collapses into the one loop coding agents are reliably good at — test-driven development.
+
+```text
+write code → run → read exit code → fix → repeat until green
+```
+
+`nullius verify --json` is the test suite for facts. Red means "an untraceable claim exists, here is which one"; green means "every number and citation in this report traces to evidence." In our recorded runs (see `docs/paper/evaluation/`), the same model that confabulated a regression slope of 1.9450 when asked directly (truth: 3.0) converged, inside this loop, to a sandbox-executed 3.0007 — and its one attempt to decorate the manuscript with statistics it never computed was rejected at the write boundary.
+
+Honest boundary: the gates enforce **factual traceability, not methodological soundness**. A badly designed but correctly executed analysis (n = 3, uncorrected multiple comparisons) passes the gates; catching that remains the job of the reviewer role and of you. The accurate slogan is not "the agent becomes deterministic" but: **nothing the agent says reaches the world without passing a deterministic checkpoint.**
+
 ## How it is built
 
 TypeScript monorepo: `packages/core` (gates + orchestrator, UI-independent), `packages/conformance` (language-independent JSON test vectors — the spec), `packages/cli`, `packages/server` (HTTP/WebSocket), `apps/desktop` (Tauri v2 + React). Generated Python runs by default in a **WebAssembly sandbox** (Pyodide) where network access is structurally absent — no Docker required, identical on all three OSes; macOS `sandbox-exec` and Docker backends are available for full CPython. If no sandbox can be established, execution is refused, never downgraded.
@@ -210,6 +231,8 @@ The full audited gap list, in priority order, lives in [issue #1](../../issues/1
 ## 日本語クイックガイド
 
 アプリ内の **Tutorial タブ**に日本語の完全な手順があります(キー取得 → 保存 → プロジェクト作成 → データ追加 → 計画採択 → Full Auto → レビュー → 書き出し)。データは `data/` フォルダに置くだけで、実行のたびに自動で解析環境へコピーされ、AIに「このデータに基づいて研究せよ」と指示されます。
+
+**AIエージェント(Codex / Claude Code など)と使う場合の要点**: Nulliusはエージェントを決定論的にするのではなく、**生成は確率的なまま、判定だけを決定論的なコードにし、判定を迂回する出口を全部塞ぎます**。エージェントは (1) 自分の出力を自分で採点できず(審査はLLMでなく値照合)、(2) 実行せずに証拠を作れず(サンドボックス実行の生成物のみが証拠)、(3) 採択後に成功基準を動かせず(プロトコルロック)、(4) 原稿に直接書き込めません(ゲート付きパッチのみ)。結果として研究ループが「テストが通るまで直す」というTDDと同型になり、`nullius verify --json` の exit 0 が「全数値・全引用が証拠まで遡れる」ことの機械的な証明になります。ただしゲートが保証するのは**事実の追跡可能性**であり、手法の妥当性(サンプル数や統計設計)は今も人間とreviewerの仕事です。
 
 ## License
 
