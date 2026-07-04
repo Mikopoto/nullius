@@ -31,6 +31,12 @@ interface TimelineEvent {
   severity?: "ok" | "warning" | "critical";
 }
 
+interface LocalServerResult {
+  port: number;
+  url: string;
+  message: string;
+}
+
 interface Readiness {
   ready: boolean;
   readinessScore: number;
@@ -100,7 +106,7 @@ const useAppState = create<AppState>((set, get) => ({
   useMock: true,
   activePanel: "setup",
   busy: false,
-  status: "Start `node packages/cli/dist/index.js serve --port 8787`, then connect.",
+  status: "Desktop starts the local server automatically. In a browser, start `nullius serve` and connect.",
   events: [],
   streamLines: [],
   consoleQuery: "",
@@ -273,7 +279,21 @@ function App() {
   const appendEvent = useAppState((state) => state.appendEvent);
 
   useEffect(() => {
-    void invoke("ensure_local_server", { port: 8787 }).catch(() => undefined);
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let cancelled = false;
+    useAppState.setState({ status: "Starting local server..." });
+    void invoke<LocalServerResult>("ensure_local_server", { port: 0 })
+      .then((result) => {
+        if (cancelled) return;
+        useAppState.setState({ serverUrl: result.url, status: result.message });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        useAppState.setState({ status: `Local server failed to start: ${String(error)}` });
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -424,7 +444,7 @@ function SetupPanel() {
       </section>
       <section className="card">
         <h2>Controls</h2>
-        <p className="muted">Run `node packages/cli/dist/index.js serve --port 8787` before using the GUI against the local server.</p>
+        <p className="muted">The desktop app starts the local server automatically. In a browser, run `node packages/cli/dist/index.js serve --port 8787`, then connect.</p>
         <div className="button-stack">
           <button onClick={() => void state.connect()}>Connect</button>
           <button className="primary" onClick={() => void state.createProject()}>Create Project</button>

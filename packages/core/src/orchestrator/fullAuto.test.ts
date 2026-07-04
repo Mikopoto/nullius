@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -36,16 +37,43 @@ async function adoptMockPlan(root: string): Promise<void> {
 
 describe("FullAutoOrchestrator", () => {
 
-  it("rejects a second run when a project run lock exists", async () => {
+  it("rejects a second run when a live project run lock exists", async () => {
     const root = await makeProject();
     try {
       await mkdir(join(root, "runtime"), { recursive: true });
-      await writeFile(join(root, "runtime", "run.lock"), "locked", "utf8");
+      await writeFile(join(root, "runtime", "run.lock"), JSON.stringify({ id: "other", pid: process.pid, startedAt: new Date().toISOString() }), "utf8");
       await expect(new FullAutoOrchestrator().runOnce(root, new MockResearchAgents())).rejects.toThrow(/already active/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("takes over a stale project run lock from a dead pid", async () => {
+    const root = await makeProject();
+    try {
+      await mkdir(join(root, "runtime"), { recursive: true });
+      await writeFile(join(root, "runtime", "run.lock"), JSON.stringify({ id: "stale", pid: 999999999, startedAt: new Date().toISOString() }), "utf8");
+      const result = await new FullAutoOrchestrator().runOnce(root, new MockResearchAgents());
+      expect(result.events.map((event) => event.kind)).toContain("plan.created");
+      expect(existsSync(join(root, "runtime", "run.lock"))).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("releases the project run lock after an aborted execution path", async () => {
+    const root = await makeProject();
+    try {
+      await adoptMockPlan(root);
+      const controller = new AbortController();
+      controller.abort();
+      await new FullAutoOrchestrator().runOnce(root, new MockResearchAgents(), undefined, { signal: controller.signal });
+      expect(existsSync(join(root, "runtime", "run.lock"))).toBe(false);
+      await expect(new FullAutoOrchestrator().runOnce(root, new MockResearchAgents())).resolves.toBeTruthy();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   it("creates a plan candidate and stops when no plan has been adopted", async () => {
     const root = await makeProject();

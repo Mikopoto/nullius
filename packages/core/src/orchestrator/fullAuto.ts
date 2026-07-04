@@ -411,17 +411,58 @@ async function acquireProjectRunLock(root: string, id: string): Promise<() => Pr
   const runtimeDir = join(root, "runtime");
   const lockPath = join(runtimeDir, "run.lock");
   await mkdir(runtimeDir, { recursive: true });
-  try {
+  const writeLock = async () => {
     await writeFile(lockPath, JSON.stringify({ id, pid: process.pid, startedAt: new Date().toISOString() }, null, 2), { encoding: "utf8", flag: "wx" });
+  };
+
+  try {
+    await writeLock();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const existing = await inspectProjectRunLock(lockPath);
+    if (existing === "active") {
       throw new Error(`Another Nullius run is already active for this project: ${lockPath}`);
     }
-    throw error;
+    await rm(lockPath, { force: true });
+    try {
+      await writeLock();
+    } catch (retryError) {
+      if ((retryError as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new Error(`Another Nullius run is already active for this project: ${lockPath}`);
+      }
+      throw retryError;
+    }
   }
+
   return async () => {
+    try {
+      const current = JSON.parse(await readFile(lockPath, "utf8")) as { id?: unknown };
+      if (current.id !== id) return;
+    } catch {
+      return;
+    }
     await rm(lockPath, { force: true });
   };
+}
+
+async function inspectProjectRunLock(lockPath: string): Promise<"active" | "stale"> {
+  try {
+    const lock = JSON.parse(await readFile(lockPath, "utf8")) as { pid?: unknown };
+    return isLiveProcessId(lock.pid) ? "active" : "stale";
+  } catch {
+    return "stale";
+  }
+}
+
+function isLiveProcessId(pid: unknown): boolean {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "EPERM";
+  }
 }
 
 async function ensureLanesForApprovedPlans(root: string, snapshot: ProjectSnapshot, approvedPlans: Plan[], emit: Emit): Promise<void> {
