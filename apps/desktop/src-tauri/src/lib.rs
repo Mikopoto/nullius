@@ -202,6 +202,11 @@ pub fn run() {
                 stop_managed_server(window.app_handle());
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Nullius");
+        .build(tauri::generate_context!())
+        .expect("error while building Nullius")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+                stop_managed_server(app);
+            }
+        });
 }
