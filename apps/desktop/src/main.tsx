@@ -520,7 +520,7 @@ function Header() {
     <header className="header">
       <div>
         <p className="eyebrow">Evidence-gated research</p>
-        <h1>{question}</h1>
+        <h1 title={question}>{question}</h1>
       </div>
       <div className="header-actions">
         <button className="primary" disabled={busy} onClick={() => void run()}>{busy ? "Running…" : "Run Full Auto"}</button>
