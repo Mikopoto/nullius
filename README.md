@@ -42,7 +42,7 @@ pnpm --filter @nullius/desktop tauri:dev
 The app ships a built-in **Tutorial tab (English / 日本語)** with the full beginner flow. In short:
 
 1. **API key** — Setup → API Keys. Easiest: an [OpenRouter](https://openrouter.ai) key (one key, many models). macOS stores it in the system Keychain; Windows/Linux keep it in memory for the session (use an environment variable to persist). Keys are never written to project files.
-2. **Project** — Setup → Project: Browse… to pick an empty folder, write your research question, untick "mock agents" for real research.
+2. **Project** — Setup → Project: Browse… to pick an empty folder and write your research question.
 3. **Data (optional)** — press "Add data files…". Files land in the project's `data/` folder; **every Full Auto run automatically copies them into the analysis working directory and instructs the AI to base the research on them.** No files = the AI generates the data its plan requires.
 4. **Models (optional)** — per-role provider + model id (default `openrouter/auto`).
 5. **Plan** — Generate Plan, read it, **Adopt** (this locks the success criteria; the run will not proceed without it).
@@ -54,8 +54,14 @@ The app ships a built-in **Tutorial tab (English / 日本語)** with the full be
 ```bash
 nullius() { node packages/cli/dist/index.js "$@"; }
 
-nullius keys set openrouter sk-or-v1-...          # macOS Keychain (or use env vars)
-nullius init myproject --question "Is y linear in x in data/measurements.csv?"
+nullius keys set openrouter sk-or-v1-...          # macOS Keychain
+# Windows/Linux, or CI:
+export OPENROUTER_API_KEY=sk-or-v1-...
+
+nullius init myproject \
+  --question "Is y linear in x in data/measurements.csv?" \
+  --provider openrouter \
+  --model openrouter/auto
 cp measurements.csv myproject/data/               # optional: your input data
 nullius run myproject                             # pass 1: drafts a plan, pauses
 nullius adopt <planId> myproject                  # human approval locks the protocol
@@ -64,9 +70,64 @@ nullius verify myproject --json                   # exit 0 only if every gate is
 nullius export md myproject                       # final report
 ```
 
-`nullius verify --json [--gate numbers|citations|repro|all]` is a stable contract for **research CI**: wire it into your pipeline so no ungrounded number can merge, the same way tests gate code.
+### CLI AI provider and model setup
 
-Try it free (no API key): add `--mock` to `run` for deterministic demo agents, or `--mock --fabricated` to watch the write boundary block a fabricated number.
+Nullius has three AI roles: `planner`, `executor`, and `reviewer`. By default all three use:
+
+```text
+provider: openrouter
+model:    openrouter/auto
+```
+
+Supported API providers in the current CLI are:
+
+```text
+openrouter | openai | anthropic | customOpenAICompatible
+```
+
+API keys can be supplied either through the macOS Keychain or environment variables:
+
+```bash
+nullius keys set openrouter sk-or-v1-...   # macOS only
+nullius keys env                           # prints the expected env var names
+
+export OPENROUTER_API_KEY=sk-or-v1-...
+export OPENAI_API_KEY=sk-...
+export ANTHROPIC_API_KEY=sk-ant-...
+export CUSTOM_OPENAI_API_KEY=...
+export CUSTOM_OPENAI_BASE_URL=https://your-openai-compatible-endpoint/v1
+```
+
+Set one model for all roles at project creation:
+
+```bash
+nullius init myproject \
+  --question "..." \
+  --provider openrouter \
+  --model anthropic/claude-sonnet-4.5
+```
+
+Or split roles explicitly:
+
+```bash
+nullius init myproject \
+  --question "..." \
+  --planner-provider openrouter --planner-model openai/gpt-4o-mini \
+  --executor-provider openrouter --executor-model google/gemini-2.5-flash \
+  --reviewer-provider openrouter --reviewer-model anthropic/claude-sonnet-4.5
+```
+
+Change models later:
+
+```bash
+nullius models myproject
+nullius models myproject --executor-model openai/gpt-4o-mini
+nullius models myproject --provider openrouter --model openrouter/auto
+```
+
+The settings are written to `<project>/nullius.json`; API keys are not written to project files.
+
+`nullius verify --json [--gate numbers|citations|repro|all]` is a stable contract for **research CI**: wire it into your pipeline so no ungrounded number can merge, the same way tests gate code.
 
 ## Intended usage patterns
 

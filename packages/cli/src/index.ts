@@ -24,33 +24,58 @@ import {
   saveNode,
   savePlan,
   snapshotToGateProject,
-  verifyLiteratureItem
+  verifyLiteratureItem,
+  type ProjectManifest
 } from "@nullius/core";
 import { startNulliusServer } from "@nullius/server";
 
 const program = new Command();
+const providerChoices = ["openrouter", "openai", "anthropic", "customOpenAICompatible"] as const;
+const effortChoices = ["none", "low", "medium", "high"] as const;
+
+type RoleName = "planner" | "executor" | "reviewer";
+type ProviderName = typeof providerChoices[number];
+type ReasoningEffort = typeof effortChoices[number];
+type RoleSettings = ProjectManifest["roles"];
+
+interface ModelOptions {
+  provider?: ProviderName;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+  plannerProvider?: ProviderName;
+  plannerModel?: string;
+  plannerEffort?: ReasoningEffort;
+  executorProvider?: ProviderName;
+  executorModel?: string;
+  executorEffort?: ReasoningEffort;
+  reviewerProvider?: ProviderName;
+  reviewerModel?: string;
+  reviewerEffort?: ReasoningEffort;
+}
+
+interface InitOptions extends ModelOptions {
+  question?: string;
+}
 
 program
   .name("nullius")
   .description("Evidence-gated AI research workspace")
   .version("0.1.0");
 
-program
+const initCommand = program
   .command("init")
   .description("Create a Nullius project manifest")
   .argument("[folder]", "project folder", ".")
-  .option("--question <question>", "research question")
-  .action(async (folder: string, options: { question?: string }) => {
+  .option("--question <question>", "research question");
+
+addModelOptions(initCommand)
+  .action(async (folder: string, options: InitOptions) => {
     const question = options.question ?? "";
     const manifest = ProjectManifestSchema.parse({
       schemaVersion: 1,
       name: question.trim() || "Untitled Nullius Project",
       question,
-      roles: {
-        planner: { provider: "openrouter", model: "openrouter/auto", reasoningEffort: "none" },
-        executor: { provider: "openrouter", model: "openrouter/auto", reasoningEffort: "none" },
-        reviewer: { provider: "openrouter", model: "openrouter/auto", reasoningEffort: "none" }
-      },
+      roles: applyModelOptions(defaultRoles(), options),
       settings: {
         maxLanes: 3,
         depth: "standard",
@@ -125,6 +150,22 @@ program
     const snapshot = await loadProject(folder);
     const report = readinessReport(snapshotToGateProject(snapshot), snapshot.manifest.settings.depth, projectGateIO(folder));
     process.stdout.write(`${report.ready ? "Ready" : "Not ready"} · ${Math.round(report.readinessScore * 100)}% · claims ${report.supportedClaims} · patches ${snapshot.patches.length}\n`);
+  });
+
+const modelsCommand = program
+  .command("models")
+  .description("Show or update planner/executor/reviewer provider and model settings")
+  .argument("[folder]", "project folder", ".");
+
+addModelOptions(modelsCommand)
+  .action(async (folder: string, options: ModelOptions) => {
+    const snapshot = await loadProject(folder);
+    const updatedRoles = applyModelOptions(snapshot.manifest.roles, options);
+    if (hasModelOptions(options)) {
+      await saveManifest(folder, { ...snapshot.manifest, roles: updatedRoles });
+      process.stdout.write(`Updated model settings in ${folder}/nullius.json\n`);
+    }
+    printRoles(updatedRoles);
   });
 
 program
@@ -334,6 +375,101 @@ keys
   });
 
 program.parse();
+
+function addModelOptions(command: Command): Command {
+  return command
+    .option("--provider <provider>", "provider for all roles", (value) => parseChoice(value, providerChoices, "provider"))
+    .option("--model <model>", "model id for all roles")
+    .option("--reasoning-effort <effort>", "reasoning effort for all roles", (value) => parseChoice(value, effortChoices, "reasoning effort"))
+    .option("--planner-provider <provider>", "planner provider", (value) => parseChoice(value, providerChoices, "planner provider"))
+    .option("--planner-model <model>", "planner model id")
+    .option("--planner-effort <effort>", "planner reasoning effort", (value) => parseChoice(value, effortChoices, "planner effort"))
+    .option("--executor-provider <provider>", "executor provider", (value) => parseChoice(value, providerChoices, "executor provider"))
+    .option("--executor-model <model>", "executor model id")
+    .option("--executor-effort <effort>", "executor reasoning effort", (value) => parseChoice(value, effortChoices, "executor effort"))
+    .option("--reviewer-provider <provider>", "reviewer provider", (value) => parseChoice(value, providerChoices, "reviewer provider"))
+    .option("--reviewer-model <model>", "reviewer model id")
+    .option("--reviewer-effort <effort>", "reviewer reasoning effort", (value) => parseChoice(value, effortChoices, "reviewer effort"));
+}
+
+function parseChoice<T extends string>(value: string, choices: readonly T[], label: string): T {
+  if ((choices as readonly string[]).includes(value)) return value as T;
+  throw new Error(`Invalid ${label}: ${value}. Expected one of: ${choices.join(", ")}`);
+}
+
+function defaultRoles(): RoleSettings {
+  return {
+    planner: { provider: "openrouter", model: "openrouter/auto", reasoningEffort: "none" },
+    executor: { provider: "openrouter", model: "openrouter/auto", reasoningEffort: "none" },
+    reviewer: { provider: "openrouter", model: "openrouter/auto", reasoningEffort: "none" }
+  };
+}
+
+function applyModelOptions(current: RoleSettings, options: ModelOptions): RoleSettings {
+  const next: RoleSettings = {
+    planner: { ...current.planner },
+    executor: { ...current.executor },
+    reviewer: { ...current.reviewer }
+  };
+  for (const role of ["planner", "executor", "reviewer"] as const) {
+    const override = roleOverrides(role, options);
+    next[role] = {
+      ...next[role],
+      ...(options.provider ? { provider: options.provider } : {}),
+      ...(options.model ? { model: options.model } : {}),
+      ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+      ...(override.provider ? { provider: override.provider } : {}),
+      ...(override.model ? { model: override.model } : {}),
+      ...(override.reasoningEffort ? { reasoningEffort: override.reasoningEffort } : {})
+    };
+  }
+  return ProjectManifestSchema.shape.roles.parse(next);
+}
+
+function roleOverrides(role: RoleName, options: ModelOptions): { provider?: ProviderName; model?: string; reasoningEffort?: ReasoningEffort } {
+  const result: { provider?: ProviderName; model?: string; reasoningEffort?: ReasoningEffort } = {};
+  switch (role) {
+    case "planner":
+      if (options.plannerProvider) result.provider = options.plannerProvider;
+      if (options.plannerModel) result.model = options.plannerModel;
+      if (options.plannerEffort) result.reasoningEffort = options.plannerEffort;
+      return result;
+    case "executor":
+      if (options.executorProvider) result.provider = options.executorProvider;
+      if (options.executorModel) result.model = options.executorModel;
+      if (options.executorEffort) result.reasoningEffort = options.executorEffort;
+      return result;
+    case "reviewer":
+      if (options.reviewerProvider) result.provider = options.reviewerProvider;
+      if (options.reviewerModel) result.model = options.reviewerModel;
+      if (options.reviewerEffort) result.reasoningEffort = options.reviewerEffort;
+      return result;
+  }
+}
+
+function hasModelOptions(options: ModelOptions): boolean {
+  return Boolean(
+    options.provider ||
+    options.model ||
+    options.reasoningEffort ||
+    options.plannerProvider ||
+    options.plannerModel ||
+    options.plannerEffort ||
+    options.executorProvider ||
+    options.executorModel ||
+    options.executorEffort ||
+    options.reviewerProvider ||
+    options.reviewerModel ||
+    options.reviewerEffort
+  );
+}
+
+function printRoles(roles: RoleSettings): void {
+  for (const role of ["planner", "executor", "reviewer"] as const) {
+    const config = roles[role];
+    process.stdout.write(`${role}\t${config.provider}\t${config.model}\treasoning=${config.reasoningEffort}\n`);
+  }
+}
 
 function runProcess(command: string, args: string[], cwd: string): Promise<number> {
   return new Promise((resolve) => {
