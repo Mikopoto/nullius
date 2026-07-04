@@ -37,6 +37,23 @@ async function adoptMockPlan(root: string): Promise<void> {
 
 describe("FullAutoOrchestrator", () => {
 
+  it("stages project data files into the node working directory", async () => {
+    const root = await makeProject();
+    try {
+      await mkdir(join(root, "data"), { recursive: true });
+      await writeFile(join(root, "data", "input.csv"), "x,y\n1,2\n2,4\n", "utf8");
+      await adoptMockPlan(root);
+      await new FullAutoOrchestrator().runOnce(root, new MockResearchAgents());
+      const snapshot = await loadProject(root);
+      const lane = snapshot.lanes[0]!;
+      const node = lane.nodes[0]!;
+      const staged = join(root, "lanes", lane.id, "nodes", node.id, "data", "input.csv");
+      expect(existsSync(staged)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("rejects a second run when a live project run lock exists", async () => {
     const root = await makeProject();
     try {

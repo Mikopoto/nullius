@@ -195,6 +195,7 @@ fn stop_managed_server(app: &tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(ServerProcess(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![ensure_local_server])
         .on_window_event(|window, event| {

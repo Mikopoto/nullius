@@ -72,9 +72,15 @@ export class RoleSeparatedResearchAgents implements ResearchAgents {
         "Return only JSON matching this shape:",
         '{"title":"string","code":"python code string","claimText":"one result claim that the generated code can actually support"}',
         "The code must be self-contained, deterministic, network-free, and write at least one small artifact under artifacts/.",
+        "If input data files are listed, read them from the relative path ./data/<name> and base the analysis on them instead of generating synthetic data.",
         "Do not fabricate results in claimText; it must be a claim that can be checked from the generated artifact."
       ].join("\n"),
-      `Approved protocol/plan:\n${JSON.stringify(plan, null, 2)}`
+      [
+        `Approved protocol/plan:\n${JSON.stringify(plan, null, 2)}`,
+        options?.dataFiles?.length
+          ? `Input data files available in the working directory: ${options.dataFiles.map((name) => `./data/${name}`).join(", ")}`
+          : "No user-supplied data files; generate the data the plan requires."
+      ].join("\n\n")
     );
     return ExecutorDraftSchema.parse(json);
   }

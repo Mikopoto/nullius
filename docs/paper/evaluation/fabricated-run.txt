@@ -1,0 +1,43 @@
+# Adversarial control: the synthesizer is forced to fabricate a numeric result.
+$ nullius init /tmp/nlx-fab --question "Does the synthetic slope equal 2.0?"
+Created Nullius project at /tmp/nlx-fab
+Adopted plan 1ce0a243-f22e-4c32-b59b-9dab8ba6efb1
+
+$ nullius run /tmp/nlx-fab --mock --fabricated   # synthesizer injects a number no artifact supports
+#1 system lane.created: Lane created
+#2 executor node.generated: Node generated
+#3 executor node.executed: Node executed
+#4 reviewer review.completed: Review completed
+#5 synthesizer patch.staged: Patch staged
+#6 system intervention.required: Patch blocked
+#7 system run.completed: Run completed
+#1 executor node.generated: Node generated
+#2 executor node.executed: Node executed
+#3 reviewer review.completed: Review completed
+#4 synthesizer patch.staged: Patch staged
+#5 system intervention.required: Patch blocked
+#6 system run.completed: Run completed
+#1 executor node.generated: Node generated
+#2 executor node.executed: Node executed
+#3 reviewer review.completed: Review completed
+#4 synthesizer patch.staged: Patch staged
+#5 system intervention.required: Patch blocked
+#6 system run.completed: Run completed
+Run 1d934f52-410c-4265-a00c-82ca56b6bfab completed: not ready
+
+--- staged patch status ---
+patch 2f5c1ce9: status=needsRevision blocking_warnings=['Number not traceable to any execution artifact: 9.4142']
+patch 4e1ecd31: status=needsRevision blocking_warnings=['Number not traceable to any execution artifact: 9.4142']
+patch a9be123a: status=needsRevision blocking_warnings=['Number not traceable to any execution artifact: 9.4142']
+
+--- manuscript/report.md after the run ---
+
+$ nullius verify /tmp/nlx-fab --json --depth quick
+{
+  "ok": false,
+  "ungroundedResultNumbers": [],
+  "failures": [
+    "readiness failed"
+  ]
+}
+exit code: 0

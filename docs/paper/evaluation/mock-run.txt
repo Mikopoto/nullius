@@ -1,0 +1,79 @@
+$ nullius init /tmp/nlx-mock --question "Does the synthetic slope equal 2.0?"
+Created Nullius project at /tmp/nlx-mock
+
+$ nullius run /tmp/nlx-mock --mock            # first pass drafts a plan, then pauses for adoption
+#1 planner plan.created: Plan candidate created
+#2 system intervention.required: Plan adoption required
+#1 planner plan.created: Plan candidate created
+#2 system intervention.required: Plan adoption required
+#1 planner plan.created: Plan candidate created
+#2 system intervention.required: Plan adoption required
+Run 598419e1-09d5-4094-9918-129a9a31f4a4 completed: not ready
+
+$ nullius adopt 4d6a202e-7201-4a08-a092-9ced50711c8b /tmp/nlx-mock       # human approval locks the protocol
+Adopted plan 4d6a202e-7201-4a08-a092-9ced50711c8b
+
+$ nullius run /tmp/nlx-mock --mock            # full pass: generate, execute, review, gate, write
+#1 system lane.created: Lane created
+#2 executor node.generated: Node generated
+#3 executor node.executed: Node executed
+#4 reviewer review.completed: Review completed
+#5 synthesizer patch.staged: Patch staged
+#6 synthesizer patch.applied: Patch applied
+#7 system run.completed: Run completed
+#1 executor node.generated: Node generated
+#2 executor node.executed: Node executed
+#3 reviewer review.completed: Review completed
+#4 synthesizer patch.staged: Patch staged
+#5 synthesizer patch.applied: Patch applied
+#6 system run.completed: Run completed
+Run 56e42d82-829f-4f7f-8a03-1ccf43cb7ae6 completed: ready
+
+$ nullius verify /tmp/nlx-mock --json --gate all
+{
+  "ok": true,
+  "gate": "all",
+  "readiness": {
+    "blankBody": false,
+    "foundSections": 7,
+    "requiredSections": 7,
+    "supportedClaims": 2,
+    "totalNodeCount": 2,
+    "reviewedNodeCount": 2,
+    "openMarkers": 0,
+    "criticalCount": 0,
+    "executableErrorCount": 0,
+    "staleSupportRefCount": 0,
+    "orphanResultClaimCount": 0,
+    "approvedUnappliedPatchCount": 0,
+    "pendingPatchCount": 0,
+    "rejectedClaimPatchCount": 0,
+    "missingArtifactCount": 0,
+    "unverifiedCitationRefCount": 0,
+    "internalLeakTerms": [],
+    "unapprovedAmendmentCount": 0,
+    "ungroundedResultNumbers": [],
+    "ungroundedIntegers": [],
+    "irreproducibleNodeCount": 0,
+    "readinessScore": 0.9999999999999999,
+    "ready": true
+  },
+  "failures": []
+}
+exit code: 0
+
+$ nullius export md /tmp/nlx-mock
+# Abstract
+We test a linear relation on synthetic data.
+# Introduction
+A deterministic synthetic fixture is used.
+# Methods
+Python code writes a CSV artifact and the manuscript only reports values grounded in that artifact.
+# Results
+The fit slope is 2.0.
+# Discussion
+The output is accepted only when it is grounded in the generated artifact.
+# Limitations
+Synthetic data only.
+# References
+None.

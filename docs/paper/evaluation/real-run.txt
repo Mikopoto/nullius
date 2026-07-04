@@ -1,0 +1,105 @@
+$ nullius run /tmp/nlx-real     # real API pass 1: planner drafts, pauses for adoption
+#1 system steering.consumed: Steering instruction consumed
+#2 planner plan.created: Plan candidate created
+#3 system intervention.required: Plan adoption required
+Run 598ae2cd-c4bb-42ea-b28b-ad9752e7e80b completed: not ready
+$ nullius adopt linear_relation_analysis_001 /tmp/nlx-real
+Adopted plan linear_relation_analysis_001
+
+$ nullius run /tmp/nlx-real     # real API pass 2: generate code, execute in Pyodide sandbox, review, gate
+#1 system steering.consumed: Steering instruction consumed
+#2 system lane.created: Lane created
+#3 executor node.generated: Node generated
+#4 executor node.executed: Execution failed
+#5 reviewer review.completed: Review completed
+#6 executor selfCorrection.started: Self-correction round 1
+#7 executor selfCorrection.completed: Corrected draft generated
+#8 executor node.executed: Node executed
+#9 reviewer review.completed: Review completed
+#10 synthesizer patch.staged: Patch staged
+#11 system intervention.required: Patch blocked
+#12 system run.completed: Run completed
+Run af7e6083-3311-499b-bd21-acb362ae578e completed: not ready
+
+$ nullius verify /tmp/nlx-real --json --depth quick
+{
+  "ok": false,
+  "gate": "all",
+  "readiness": {
+    "blankBody": true,
+    "foundSections": 0,
+    "requiredSections": 7,
+    "supportedClaims": 0,
+    "totalNodeCount": 1,
+    "reviewedNodeCount": 0,
+    "openMarkers": 0,
+    "criticalCount": 0,
+    "executableErrorCount": 0,
+    "staleSupportRefCount": 0,
+    "orphanResultClaimCount": 0,
+    "approvedUnappliedPatchCount": 0,
+    "pendingPatchCount": 0,
+    "rejectedClaimPatchCount": 0,
+    "missingArtifactCount": 0,
+    "unverifiedCitationRefCount": 0,
+    "internalLeakTerms": [],
+    "unapprovedAmendmentCount": 0,
+    "ungroundedResultNumbers": [],
+    "ungroundedIntegers": [],
+    "irreproducibleNodeCount": 0,
+    "readinessScore": 0,
+    "ready": false
+  },
+  "failures": [
+    "readiness failed"
+  ]
+}
+exit code: 1
+
+--- The gate blocked the first manuscript: the model reported 0.05 and 0.7, numbers it never computed. ---
+$ nullius steer "Report only numbers that appear in execution artifacts..." /tmp/nlx-real
+Saved steering instruction
+
+$ nullius run /tmp/nlx-real     # steered retry
+#1 system steering.consumed: Steering instruction consumed
+#2 executor node.generated: Node generated
+#3 executor node.executed: Execution failed
+#4 reviewer review.completed: Review completed
+#5 executor selfCorrection.started: Self-correction round 1
+#6 executor selfCorrection.completed: Corrected draft generated
+#7 executor node.executed: Node executed
+#8 reviewer review.completed: Review completed
+#9 synthesizer patch.staged: Patch staged
+#10 synthesizer patch.applied: Patch applied
+#11 system run.completed: Run completed
+Run a90cd86d-98aa-47b8-9998-df5b5b50c2ff completed: not ready
+
+$ nullius verify /tmp/nlx-real --json --depth quick
+{
+  "ok": false,
+  "ready": false,
+  "supportedClaims": 2,
+  "ungroundedResultNumbers": []
+}
+
+$ nullius reject 49efda68-fcb1-4871-909d-7fa424947877 /tmp/nlx-real   # human rejects the blocked first draft
+Rejected patch 49efda68-fcb1-4871-909d-7fa424947877
+
+$ nullius verify /tmp/nlx-real --json --depth quick
+{
+  "ok": true,
+  "ready": true,
+  "readinessScore": 1.0,
+  "ungroundedResultNumbers": []
+}
+exit code: 0
+
+--- final manuscript/report.md (Results excerpt) ---
+# Results
+The analysis yielded the following results:
+- Slope (a): 3.0007
+- Intercept (b): 1.4877
+- R-squared: 0.9997
+These values indicate a very strong linear relationship between the variables.
+
+# Discussion

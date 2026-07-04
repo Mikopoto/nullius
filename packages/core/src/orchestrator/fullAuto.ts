@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExecutionBackend, ExecutionResult } from "../exec/executionBackend.js";
 import { defaultExecutionBackend } from "../exec/executionBackend.js";
@@ -72,6 +72,8 @@ export type AgentStreamDelta =
 
 export interface AgentCallOptions {
   onStream?: (delta: AgentStreamDelta) => void;
+  /** Relative names of user-supplied input files available at ./data inside the node working directory. */
+  dataFiles?: string[];
 }
 
 export interface ResearchAgents {
@@ -218,7 +220,8 @@ export class FullAutoOrchestrator {
   }
 
   private async produceNode(root: string, runId: string, lane: LoadedLane, plan: Plan, agents: ResearchAgents, emit: Emit, streamOptions: (role: FullAutoEvent["role"], purpose: string) => AgentCallOptions, selfCorrectionRounds: number, signal?: AbortSignal): Promise<ProducedNode> {
-    let draft = await agents.createExecutorDraft(plan, streamOptions("executor", "nodeExecution"));
+    const dataFiles = await listProjectDataFiles(root);
+    let draft = await agents.createExecutorDraft(plan, { ...streamOptions("executor", "nodeExecution"), dataFiles });
     const node: NodeRecord = {
       id: randomUUID(),
       title: draft.title,
@@ -233,6 +236,7 @@ export class FullAutoOrchestrator {
     await emit({ kind: "node.generated", role: "executor", title: "Node generated", detail: `${lane.name}: ${draft.title}` });
 
     const nodeDir = join(root, "lanes", lane.id, "nodes", node.id);
+    await stageProjectDataFiles(root, nodeDir, dataFiles);
     const executionOptions = signal
       ? { allowNetwork: false, timeoutSec: 30, signal }
       : { allowNetwork: false, timeoutSec: 30 };
@@ -404,6 +408,32 @@ export class FullAutoOrchestrator {
       await emit({ kind: "intervention.required", role: "system", title: "Patch blocked", detail: applied.reason ?? "Gate rejected patch." });
     }
     return patch;
+  }
+}
+
+const maxStagedDataFileBytes = 64 * 1024 * 1024;
+
+/** Files the user dropped into <project>/data; these are staged into every node run. */
+export async function listProjectDataFiles(root: string): Promise<string[]> {
+  try {
+    const entries = await readdir(join(root, "data"), { withFileTypes: true });
+    const names: string[] = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || entry.name.startsWith(".")) continue;
+      const info = await stat(join(root, "data", entry.name));
+      if (info.size <= maxStagedDataFileBytes) names.push(entry.name);
+    }
+    return names.sort();
+  } catch {
+    return [];
+  }
+}
+
+async function stageProjectDataFiles(root: string, nodeDir: string, files: string[]): Promise<void> {
+  if (files.length === 0) return;
+  await mkdir(join(nodeDir, "data"), { recursive: true });
+  for (const name of files) {
+    await cp(join(root, "data", name), join(nodeDir, "data", name), { force: true });
   }
 }
 

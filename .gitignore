@@ -8,3 +8,10 @@ coverage/
 .nullius-server.log
 apps/desktop/src-tauri/target/
 .codex/
+.claude/
+docs/paper/*.aux
+docs/paper/*.log
+docs/paper/*.out
+docs/paper/*.fls
+docs/paper/*.fdb_latexmk
+docs/paper/*.synctex.gz

@@ -95,6 +95,26 @@ describe("Nullius server", () => {
     }
   });
 
+  it("stores GUI-entered keys in the session and reports them without exposing values", async () => {
+    const server = await startNulliusServer();
+    try {
+      const set = await server.command({
+        schemaVersion: 1,
+        command: "keys.set",
+        payload: { provider: "openrouter", apiKey: "sk-or-test-123", persist: false }
+      });
+      expect(set).toMatchObject({ ok: true, stored: "session" });
+      const status = await server.command({ schemaVersion: 1, command: "keys.status" }) as { status: Record<string, string> };
+      expect(status.status.openrouter).toBe("session");
+      expect(JSON.stringify(status)).not.toContain("sk-or-test-123");
+      await expect(
+        server.command({ schemaVersion: 1, command: "keys.set", payload: { provider: "openrouter", apiKey: "" } })
+      ).rejects.toThrow();
+    } finally {
+      await server.close();
+    }
+  });
+
   it("broadcasts readiness on state changes and reports inactive stop", async () => {
     const root = await mkdtemp(join(tmpdir(), "nullius-server-ws-"));
     const server = await startNulliusServer();

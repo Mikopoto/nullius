@@ -1,88 +1,90 @@
 # Nullius
 
-Nullius is an evidence-gated AI research workspace. The core rule is simple:
-no model output enters the manuscript on its own authority.
+**Evidence-gated AI research on your own machine.** Nullius lets AI models plan research, write and execute analysis code, and draft a manuscript, while deterministic gates make sure that **no number and no citation enters the report unless it can be traced to real evidence**. The name is from the Royal Society's motto, *nullius in verba*: take nobody's word for it.
 
-This TypeScript migration splits the product into:
+- Every quantitative claim must match a value in an artifact produced by locally executed, sandboxed code (value matching, not substring matching).
+- Every citation must resolve on Crossref and survive title/author/year/retraction checks.
+- Manuscript patches with any blocking warning are rejected **before** they are written, even in fully autonomous runs.
+- Three model roles (planner / executor / reviewer), independently configurable, watch each other; a live console streams every token and reasoning trace.
 
-- `packages/core`: deterministic gates, storage schemas, provider utilities, and orchestration primitives
-- `packages/conformance`: JSON test vectors ported from the Swift reference implementation
-- `packages/cli`: the future `nullius` automation and research-CI command
-- `packages/server`: the shared HTTP/WebSocket protocol surface for CLI and GUI
-- `apps/desktop`: the Tauri + React desktop application
+Does it matter? In the bundled case study, the same `gpt-4o-mini` asked directly about a 40-point dataset reported a regression slope of **1.9450** (truth: 3.0, a 35% error) with a confident R². Through Nullius, the same model produced a sandbox-executed slope of **3.0007**, and its one attempt to embellish the manuscript with statistics it never computed was blocked at the write boundary. See the paper: [`docs/paper/nullius.pdf`](docs/paper/nullius.pdf) and raw logs in [`docs/paper/evaluation/`](docs/paper/evaluation/).
 
-Current implementation status:
+## Install
 
-- M0 monorepo scaffold and CI
-- M1 zod storage schemas and conformance-vector runner
-- M2 deterministic gates: numeric grounding, citation-key extraction, citation verification helpers, claim/readiness gates, patch write boundary, and canonical reproducibility text comparison
-- M3 provider utilities: retry policy, SSE stream parsing, defensive JSON parsing, usage/cost helpers, OpenAI/OpenRouter/Anthropic/custom-compatible request construction
-- M4 default Docker-free execution backend via Pyodide; generated artifacts and stdout/stderr logs are persisted into node folders
-- M5 Full Auto orchestration: explicit plan adoption before protocol lock, lane/node budget handling, execution, review, bounded self-correction rounds, evidence normalization, claim creation, manuscript patch staging/apply, transcript events, and project run locks
-- M6 HTTP/WebSocket server and CLI commands for `init`, `plan`, `adopt`, `run`, `verify`, `watch`, `approve`, `reject`, `steer`, `citations`, `repro`, `rerun`, `export`, `keys`, and `serve`; WebSocket emits phase events plus `stream.delta` messages
-- M7 Tauri + React GUI with Setup, Mission Console live stream cards, reasoning foldouts, token badges, intervention/status controls, manuscript/patch preview, readiness gates, DAG canvas, evidence inspector, citation manager, and local server auto-start in Tauri builds
-- Role-separated real agent adapter for OpenRouter, OpenAI, Anthropic, custom OpenAI-compatible endpoints, Codex CLI, Claude Code, and OpenCode
-- Execution backend selection for Pyodide, macOS `sandbox-exec`, and Docker
-- Project-local macOS run entrypoint at `script/build_and_run.sh` and Codex Run action metadata
+### Option A: macOS app (Apple Silicon)
 
-Run:
+Download `Nullius.dmg` from [Releases](../../releases), open it, and drag Nullius to Applications. The app is not notarized yet; on first launch, right-click the app → Open (or run `xattr -dr com.apple.quarantine /Applications/Nullius.app`).
+
+The desktop app needs [Node.js 20+](https://nodejs.org) installed (it runs the local research server with it).
+
+### Option B: from source (Windows / Linux / macOS)
+
+Requirements: Node.js 20+, pnpm, and for the desktop app Rust + the [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
+git clone https://github.com/Mikopoto/nullius.git
+cd nullius
 pnpm install
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm build
-```
+pnpm build              # builds core, CLI, server, and the web UI
+pnpm test               # 88 tests should pass
 
-Quick CLI smoke test:
+# CLI is ready now:
+node packages/cli/dist/index.js --help
 
-```bash
-node packages/cli/dist/index.js init /tmp/nullius-demo --question "Does it work?"
-node packages/cli/dist/index.js run /tmp/nullius-demo --mock --lanes 3
-PLAN_ID=$(basename /tmp/nullius-demo/plans/*.json .json)
-node packages/cli/dist/index.js adopt "$PLAN_ID" /tmp/nullius-demo
-node packages/cli/dist/index.js run /tmp/nullius-demo --mock --lanes 3 --depth quick
-node packages/cli/dist/index.js verify /tmp/nullius-demo --json
-node packages/cli/dist/index.js verify /tmp/nullius-demo --json --gate numbers
-node packages/cli/dist/index.js export md /tmp/nullius-demo
-```
-
-Run with real model roles:
-
-```bash
-export OPENROUTER_API_KEY=...
-node packages/cli/dist/index.js plan /tmp/nullius-demo
-# inspect the generated plan, then adopt it:
-PLAN_ID=$(basename /tmp/nullius-demo/plans/*.json .json)
-node packages/cli/dist/index.js adopt "$PLAN_ID" /tmp/nullius-demo
-node packages/cli/dist/index.js run /tmp/nullius-demo --lanes 3
-```
-
-For API keys:
-
-```bash
-# macOS Keychain
-node packages/cli/dist/index.js keys set openrouter sk-or-v1-...
-
-# Windows/Linux or CI: use environment variables
-export OPENROUTER_API_KEY=...
-export OPENAI_API_KEY=...
-export ANTHROPIC_API_KEY=...
-```
-
-On Windows/Linux, OS-native encrypted key storage is release work. Until then, use environment variables or your CI secret store.
-
-Run the desktop app:
-
-```bash
+# Desktop app (dev):
+pnpm --filter @nullius/desktop tauri:dev
+# Desktop app (macOS build + launch):
 ./script/build_and_run.sh
 ```
 
-The script builds the monorepo, builds `Nullius.app`, starts the local command server on `127.0.0.1:8787`, and opens the app.
+## Quick start (GUI)
 
-Known remaining release work:
+The app ships a built-in **Tutorial tab (English / 日本語)** with the full beginner flow. In short:
 
-- DMG/notarized distribution is not enabled; the checked target is the `.app` bundle.
-- PDF export delegates to installed Quarto/Pandoc/LaTeX; no document toolchain is bundled.
-- The Tauri app can auto-start the local server from a repository build tree. Fully self-contained distribution still needs a packaged Node/server binary sidecar for machines without this repo checkout.
+1. **API key** — Setup → API Keys. Easiest: an [OpenRouter](https://openrouter.ai) key (one key, many models). macOS stores it in the system Keychain; Windows/Linux keep it in memory for the session (use an environment variable to persist). Keys are never written to project files.
+2. **Project** — Setup → Project: Browse… to pick an empty folder, write your research question, untick "mock agents" for real research.
+3. **Data (optional)** — press "Add data files…". Files land in the project's `data/` folder; **every Full Auto run automatically copies them into the analysis working directory and instructs the AI to base the research on them.** No files = the AI generates the data its plan requires.
+4. **Models (optional)** — per-role provider + model id (default `openrouter/auto`).
+5. **Plan** — Generate Plan, read it, **Adopt** (this locks the success criteria; the run will not proceed without it).
+6. **Run Full Auto** — watch the live console; if it pauses, read the intervention card, optionally type a steering instruction, Resume.
+7. **Review & export** — approve/reject staged patches in Manuscript, check the Readiness lights, Export. The result is `<project>/manuscript/report.md`.
+
+## Quick start (CLI)
+
+```bash
+nullius() { node packages/cli/dist/index.js "$@"; }
+
+nullius keys set openrouter sk-or-v1-...          # macOS Keychain (or use env vars)
+nullius init myproject --question "Is y linear in x in data/measurements.csv?"
+cp measurements.csv myproject/data/               # optional: your input data
+nullius run myproject                             # pass 1: drafts a plan, pauses
+nullius adopt <planId> myproject                  # human approval locks the protocol
+nullius run myproject                             # full pass: generate, execute, review, gate
+nullius verify myproject --json                   # exit 0 only if every gate is green
+nullius export md myproject                       # final report
+```
+
+`nullius verify --json [--gate numbers|citations|repro|all]` is a stable contract for **research CI**: wire it into your pipeline so no ungrounded number can merge, the same way tests gate code.
+
+Try it free (no API key): add `--mock` to `run` for deterministic demo agents, or `--mock --fabricated` to watch the write boundary block a fabricated number.
+
+## How it is built
+
+TypeScript monorepo: `packages/core` (gates + orchestrator, UI-independent), `packages/conformance` (language-independent JSON test vectors — the spec), `packages/cli`, `packages/server` (HTTP/WebSocket), `apps/desktop` (Tauri v2 + React). Generated Python runs by default in a **WebAssembly sandbox** (Pyodide) where network access is structurally absent — no Docker required, identical on all three OSes; macOS `sandbox-exec` and Docker backends are available for full CPython. If no sandbox can be established, execution is refused, never downgraded.
+
+Architecture, gate algorithms, threat model, and the case study are documented in the paper: [`docs/paper/nullius.pdf`](docs/paper/nullius.pdf).
+
+## Safety notes
+
+- API keys: OS keychain / env vars / process memory only.
+- Generated code is treated as untrusted: deny-by-default sandboxes, resource limits, refusal over downgrade.
+- Attached file content is fenced as untrusted data in prompts (prompt-injection boundary).
+- The gates enforce *traceability*, not *truth*: read the manuscript, you stay the reviewer of record.
+
+## 日本語クイックガイド
+
+アプリ内の **Tutorial タブ**に日本語の完全な手順があります(キー取得 → 保存 → プロジェクト作成 → データ追加 → 計画採択 → Full Auto → レビュー → 書き出し)。データは `data/` フォルダに置くだけで、実行のたびに自動で解析環境へコピーされ、AIに「このデータに基づいて研究せよ」と指示されます。
+
+## License
+
+MIT © Studio Uchu

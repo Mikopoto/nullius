@@ -1,0 +1,15 @@
+# The raw (ungated) report, audited by Nullius numeric grounding: no execution artifacts exist, so every quantitative claim is untraceable.
+$ nullius verify /tmp/nlx-rawcheck --json --gate numbers
+{
+  "ok": false,
+  "ungroundedResultNumbers": [
+    "1.9450",
+    "1.4642",
+    "0.9985",
+    "99.85%"
+  ],
+  "ungroundedIntegers": [
+    "40"
+  ]
+}
+exit code: 0

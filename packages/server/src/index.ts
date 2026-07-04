@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { cp, mkdir, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { z } from "zod";
 import {
@@ -14,6 +14,7 @@ import {
   executionBackendFor,
   exportMarkdown,
   FullAutoOrchestrator,
+  listProjectDataFiles,
   loadProject,
   MockResearchAgents,
   projectGateIO,
@@ -48,7 +49,12 @@ export const ServerCommandSchema = z.object({
     "citations.search",
     "repro.check",
     "node.rerun",
-    "export.markdown"
+    "export.markdown",
+    "keys.set",
+    "keys.status",
+    "data.import",
+    "data.list",
+    "project.configure"
   ]),
   payload: z.unknown().optional()
 });
@@ -109,9 +115,47 @@ const NodePayload = z.object({
   nodeId: z.string()
 });
 
+const DataImportPayload = z.object({
+  root: z.string(),
+  files: z.array(z.string()).min(1)
+});
+
+const RoleConfigSchema = z.object({
+  provider: z.enum(["openrouter", "openai", "anthropic", "customOpenAICompatible"]),
+  model: z.string().min(1),
+  reasoningEffort: z.enum(["none", "low", "medium", "high"]).default("none")
+});
+
+const ProjectConfigurePayload = z.object({
+  root: z.string(),
+  roles: z.object({
+    planner: RoleConfigSchema,
+    executor: RoleConfigSchema,
+    reviewer: RoleConfigSchema
+  })
+});
+
+const KeysSetPayload = z.object({
+  provider: z.enum(["openrouter", "openai", "anthropic", "customOpenAICompatible"]),
+  apiKey: z.string().min(1),
+  persist: z.boolean().default(true)
+});
+
 export async function startNulliusServer(options: { port?: number } = {}): Promise<NulliusServer> {
   const clients = new Set<WebSocket>();
   const activeRuns = new Map<string, AbortController>();
+  // Keys entered through the GUI on platforms without a supported OS keychain
+  // live only in this process; they are never written to disk.
+  const sessionKeys = new Map<string, string>();
+
+  const resolveAgentEnv = async (): Promise<NodeJS.ProcessEnv> => {
+    const env = await envWithKeychain();
+    for (const [provider, apiKey] of sessionKeys) {
+      const envName = providerEnvNames()[provider];
+      if (envName) env[envName] = apiKey;
+    }
+    return env;
+  };
 
   const broadcast = (event: unknown) => {
     const payload = JSON.stringify(event);
@@ -158,7 +202,7 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
           payload.root,
           payload.mock || payload.mockFabricated
             ? new MockResearchAgents({ fabricated: payload.mockFabricated })
-            : createResearchAgentsFromManifest(snapshot.manifest, { env: await envWithKeychain() }),
+            : createResearchAgentsFromManifest(snapshot.manifest, { env: await resolveAgentEnv() }),
           (event: FullAutoEvent) => {
             broadcast({ schemaVersion: 1, type: "run.event", event });
             if (event.kind === "intervention.required") broadcast({ schemaVersion: 1, type: "intervention.required", event, root: payload.root });
@@ -181,7 +225,7 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
           payload.root,
           payload.mock || payload.mockFabricated
             ? new MockResearchAgents({ fabricated: payload.mockFabricated })
-            : createResearchAgentsFromManifest(snapshot.manifest, { env: await envWithKeychain() }),
+            : createResearchAgentsFromManifest(snapshot.manifest, { env: await resolveAgentEnv() }),
           (event: FullAutoEvent) => {
             broadcast({ schemaVersion: 1, type: "run.event", event });
             if (event.kind === "intervention.required") broadcast({ schemaVersion: 1, type: "intervention.required", event, root: payload.root });
@@ -214,7 +258,7 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
       case "plan.generate": {
         const payload = RootPayload.parse(parsed.payload);
         const snapshot = await loadProject(payload.root);
-        const plan = await createResearchAgentsFromManifest(snapshot.manifest, { env: await envWithKeychain() }).createPlan(snapshot.manifest.question);
+        const plan = await createResearchAgentsFromManifest(snapshot.manifest, { env: await resolveAgentEnv() }).createPlan(snapshot.manifest.question);
         await savePlan(payload.root, plan);
         await broadcastStateChanged(parsed.command, payload.root);
         return { ok: true, plan };
@@ -258,6 +302,65 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
       case "export.markdown": {
         const payload = RootPayload.parse(parsed.payload);
         return { body: await exportMarkdown(payload.root) };
+      }
+      case "data.import": {
+        const payload = DataImportPayload.parse(parsed.payload);
+        const dataDir = join(payload.root, "data");
+        await mkdir(dataDir, { recursive: true });
+        const imported: string[] = [];
+        for (const file of payload.files) {
+          const name = basename(file);
+          if (!name || name.startsWith(".")) continue;
+          await cp(file, join(dataDir, name), { force: true });
+          imported.push(name);
+        }
+        await broadcastStateChanged(parsed.command, payload.root);
+        return { ok: true, imported, files: await listProjectDataFiles(payload.root) };
+      }
+      case "data.list": {
+        const payload = RootPayload.parse(parsed.payload);
+        return { ok: true, files: await listProjectDataFiles(payload.root) };
+      }
+      case "project.configure": {
+        const payload = ProjectConfigurePayload.parse(parsed.payload);
+        const snapshot = await loadProject(payload.root);
+        await saveManifest(payload.root, { ...snapshot.manifest, roles: payload.roles });
+        await broadcastStateChanged(parsed.command, payload.root);
+        return { ok: true };
+      }
+      case "keys.set": {
+        const payload = KeysSetPayload.parse(parsed.payload);
+        if (payload.persist && process.platform === "darwin") {
+          const result = await runCapture("security", ["add-generic-password", "-a", "nullius", "-s", keychainService(payload.provider), "-w", payload.apiKey, "-U"]);
+          if (result.exitCode === 0) {
+            sessionKeys.delete(payload.provider);
+            return { ok: true, stored: "keychain" };
+          }
+        }
+        sessionKeys.set(payload.provider, payload.apiKey);
+        return { ok: true, stored: "session" };
+      }
+      case "keys.status": {
+        const status: Record<string, string> = {};
+        for (const [provider, envName] of Object.entries(providerEnvNames())) {
+          if (sessionKeys.has(provider)) {
+            status[provider] = "session";
+            continue;
+          }
+          if (process.env[envName]) {
+            status[provider] = "env";
+            continue;
+          }
+          if (process.platform === "darwin") {
+            const result = await runCapture("security", ["find-generic-password", "-a", "nullius", "-s", keychainService(provider), "-w"]);
+            if (result.exitCode === 0 && result.stdout.trim()) {
+              status[provider] = "keychain";
+              continue;
+            }
+          }
+          status[provider] = "none";
+        }
+        return { ok: true, status };
       }
       case "citations.verify": {
         const payload = RootPayload.parse(parsed.payload);
