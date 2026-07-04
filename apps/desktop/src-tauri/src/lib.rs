@@ -136,6 +136,21 @@ fn available_loopback_port() -> Result<u16, String> {
         .map_err(|error| format!("Could not inspect reserved local server port: {error}"))
 }
 
+fn node_binary() -> String {
+    if let Ok(custom) = std::env::var("NULLIUS_NODE") {
+        if Path::new(&custom).is_file() {
+            return custom;
+        }
+    }
+    // Apps launched from Finder get a minimal PATH, so probe the usual install locations.
+    for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
+        if Path::new(candidate).is_file() {
+            return candidate.to_string();
+        }
+    }
+    "node".to_string()
+}
+
 fn server_is_running(port: u16) -> bool {
     TcpStream::connect_timeout(
         &format!("127.0.0.1:{port}")
