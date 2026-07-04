@@ -51,7 +51,7 @@ fn ensure_local_server(
         .join("cli")
         .join("dist")
         .join("index.js");
-    let mut child = Command::new("node")
+    let mut child = Command::new(node_binary())
         .arg(cli)
         .arg("serve")
         .arg("--port")

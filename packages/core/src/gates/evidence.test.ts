@@ -152,6 +152,14 @@ describe("section and leak gates", () => {
     expect(leaks).toContain("harness");
     expect(leaks).toContain("node.qmd");
   });
+
+  it("flags internal ids but not ordinary English words containing node/lane/patch", () => {
+    const clean = internalOutputLeakTerms("The plane dispatched a node of the network along the lane; we patched nothing.");
+    expect(clean).toEqual([]);
+    const leaky = internalOutputLeakTerms("Details in node-3f2a9c1d and lane-0b7e4d21 were reviewed.");
+    expect(leaky).toContain("node-3f2a9c1d");
+    expect(leaky).toContain("lane-0b7e4d21");
+  });
 });
 
 describe("readiness", () => {

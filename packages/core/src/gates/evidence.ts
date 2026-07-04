@@ -164,7 +164,7 @@ export function blockingMarkers(markdown: string): string[] {
 
 export function internalOutputLeakTerms(markdown: string): string[] {
   const normalized = markdown.toLowerCase();
-  return [
+  const leaks = [
     "claim_id",
     "evidence_id",
     "qmdpatch",
@@ -174,11 +174,15 @@ export function internalOutputLeakTerms(markdown: string): string[] {
     "harness",
     "node.qmd",
     "sourceactivity",
-    "supportref",
-    "node",
-    "lane",
-    "patch"
+    "supportref"
   ].filter((term) => normalized.includes(term));
+  // Internal identifiers such as node-3f2a9c1d or lane-0b7e4d21: match the id shape,
+  // not the bare English words ("plane" contains "lane", "dispatched" contains "patch").
+  const idPattern = /\b(?:node|lane|patch|run|agent-run|researcher)-[0-9a-f]{8}[0-9a-f-]*\b/gi;
+  for (const match of new Set(normalized.match(idPattern) ?? [])) {
+    leaks.push(match);
+  }
+  return leaks;
 }
 
 export function markdownHeaderTitles(markdown: string): string[] {
