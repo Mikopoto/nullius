@@ -1,6 +1,32 @@
-# Nullius
+<p align="center">
+  <img src="apps/desktop/src-tauri/icons/icon.png" alt="Nullius app icon" width="120" height="120">
+</p>
 
-**Evidence-gated AI research on your own machine.** Nullius lets AI models plan research, write and execute analysis code, and draft a manuscript, while deterministic gates make sure that **no number and no citation enters the report unless it can be traced to real evidence**. The name is from the Royal Society's motto, *nullius in verba*: take nobody's word for it.
+<h1 align="center">Nullius</h1>
+
+<p align="center">
+  <strong>Evidence-gated AI research on your own machine.</strong>
+</p>
+
+<p align="center">
+  <em>Nullius in verba</em> — take nobody's word for it.
+</p>
+
+<p align="center">
+  <a href="docs/paper/nullius.pdf"><img alt="Paper" src="https://img.shields.io/badge/paper-PDF-284670"></a>
+  <img alt="Tests" src="https://img.shields.io/badge/tests-90%20passing-3C7850">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-111111">
+  <img alt="Stack" src="https://img.shields.io/badge/core-TypeScript-284670">
+  <img alt="Desktop" src="https://img.shields.io/badge/desktop-Tauri%20%2B%20React-3C7850">
+</p>
+
+<p align="center">
+  <sub><strong>Definition.</strong> Nullius is a local-first research harness where AI agents may plan, code, and draft, but manuscript claims are admitted only after deterministic evidence gates can trace them to executed artifacts, verified citations, and reproducible project state.</sub>
+</p>
+
+---
+
+Nullius lets AI models plan research, write and execute analysis code, and draft a manuscript, while deterministic gates make sure that **no number and no citation enters the report unless it can be traced to real evidence**. The name is from the Royal Society's motto, *nullius in verba*: take nobody's word for it.
 
 - Every quantitative claim must match a value in an artifact produced by locally executed, sandboxed code (value matching, not substring matching).
 - Every citation must resolve on Crossref and survive title/author/year/retraction checks.
