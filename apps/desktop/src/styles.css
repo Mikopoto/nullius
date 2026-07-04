@@ -362,6 +362,70 @@ label {
   font-size: 12.5px;
 }
 
+.plan-detail {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  margin-top: 14px;
+  background: var(--bg);
+}
+
+.plan-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.plan-detail-head strong {
+  font-size: 14.5px;
+}
+
+.plan-field {
+  margin-top: 12px;
+}
+
+.plan-field-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  margin-bottom: 3px;
+}
+
+.plan-field p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.plan-field ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 3px;
+}
+
+.plan-field li {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.plan-hint {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.intervention-jump {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
 /* ---------- Tutorial ---------- */
 
 .lang-toggle {

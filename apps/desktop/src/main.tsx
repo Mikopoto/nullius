@@ -71,7 +71,7 @@ interface ProjectSnapshot {
   literature: Array<{ id: string; title: string; citationKey: string; status: string; doi?: string; url?: string }>;
   patches: Array<{ id: string; status: string; targetSection: string; operation: string; newBody: string; appliedAt?: string; warnings: Array<{ message: string; blocking: boolean }> }>;
   lanes: Array<{ id: string; name: string; nodes: Array<{ id: string; title: string; status: string }> }>;
-  plans: Array<{ id: string; title: string; purpose: string; approved: boolean }>;
+  plans: Array<{ id: string; title: string; purpose: string; method?: string; observables?: string[]; successCriteria?: string[]; falsificationCriteria?: string[]; approved: boolean }>;
 }
 
 interface AppState {
@@ -629,15 +629,40 @@ function SetupPanel() {
           <button disabled={state.busy} onClick={() => void state.generatePlan()}>Generate Plan</button>
         </div>
         {(state.snapshot?.plans ?? []).length === 0 ? <p className="muted">No plans yet. Create a project first, or press Run once; it drafts a plan and pauses for adoption.</p> : state.snapshot?.plans.map((plan) => (
-          <div className="plan-row" key={plan.id}>
-            <div>
+          <article className="plan-detail" key={plan.id}>
+            <div className="plan-detail-head">
               <strong>{plan.title}</strong>
-              <p className="muted">{plan.purpose}</p>
+              {plan.approved ? <span className="key-badge present">adopted</span> : <button className="primary" onClick={() => void state.adoptPlan(plan.id)}>Adopt this plan</button>}
             </div>
-            {plan.approved ? <span className="key-badge present">adopted</span> : <button className="primary" onClick={() => void state.adoptPlan(plan.id)}>Adopt</button>}
-          </div>
+            <PlanField label="Purpose" text={plan.purpose} />
+            <PlanField label="Method" text={plan.method} />
+            <PlanList label="Observables" items={plan.observables} />
+            <PlanList label="Success criteria" items={plan.successCriteria} />
+            <PlanList label="Falsification criteria" items={plan.falsificationCriteria} />
+            {!plan.approved ? <p className="muted plan-hint">Read the plan above. Adopting it freezes these observables and criteria so the AI cannot move the goalposts later; Full Auto will not proceed until a plan is adopted.</p> : null}
+          </article>
         ))}
       </section>
+    </div>
+  );
+}
+
+function PlanField({ label, text }: { label: string; text: string | undefined }) {
+  if (!text?.trim()) return null;
+  return (
+    <div className="plan-field">
+      <span className="plan-field-label">{label}</span>
+      <p>{text}</p>
+    </div>
+  );
+}
+
+function PlanList({ label, items }: { label: string; items: string[] | undefined }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="plan-field">
+      <span className="plan-field-label">{label}</span>
+      <ul>{items.map((item, index) => <li key={index}>{item}</li>)}</ul>
     </div>
   );
 }
@@ -946,6 +971,9 @@ function InterventionCard({ status }: { status: string }) {
   const stopRun = useAppState((state) => state.stopRun);
   const resumeRun = useAppState((state) => state.resumeRun);
   const steer = useAppState((state) => state.steer);
+  const setPanel = useAppState((state) => state.setPanel);
+  const plans = useAppState((state) => state.snapshot?.plans);
+  const needsAdoption = /plan adoption|adopt/i.test(intervention?.title ?? "") && (plans ?? []).some((plan) => !plan.approved);
   const saveInstruction = async () => {
     await steer(instruction);
     setInstruction("");
@@ -954,6 +982,9 @@ function InterventionCard({ status }: { status: string }) {
     <section className={`intervention ${intervention ? "needs-action" : ""}`}>
       <h2>{intervention?.title ?? "Status"}</h2>
       <p>{intervention?.detail || status}</p>
+      {needsAdoption ? (
+        <button className="primary intervention-jump" onClick={() => setPanel("setup")}>Read &amp; adopt the plan in Setup →</button>
+      ) : null}
       <textarea value={instruction} onChange={(event) => setInstruction(event.currentTarget.value)} placeholder="Steering instruction for the next step" />
       <div className="intervention-actions">
         <button disabled={busy} onClick={() => void resumeRun()}>Resume</button>
