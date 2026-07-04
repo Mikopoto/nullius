@@ -68,6 +68,27 @@ nullius export md myproject                       # final report
 
 Try it free (no API key): add `--mock` to `run` for deterministic demo agents, or `--mock --fabricated` to watch the write boundary block a fabricated number.
 
+## Intended usage patterns
+
+**1. Supervised research (GUI).** You bring a question and optionally a dataset; the app plans, executes, and drafts while you watch the live console, adopt the plan, steer when it pauses, and approve patches. Best for exploratory work where your judgment matters at every step.
+
+**2. Research CI (CLI).** A repository of analyses where `nullius verify --json` runs in the pipeline: any commit whose manuscript contains an ungrounded number, an unverified citation, or an irreproducible node fails the build. Reports become artifacts that a script can certify, the same way tests certify code.
+
+**3. An AI coding agent drives the CLI.** This is a first-class use case: tell Codex, Claude Code, or any terminal agent to run research *through* Nullius instead of writing conclusions itself. The agent runs the loop and reacts to exit codes and gate reports, which are exactly the external verification signals LLM self-correction needs:
+
+```text
+Instructions for your agent:
+1. nullius init proj --question "..." ; put input files in proj/data/
+2. nullius run proj            # pauses with a drafted plan
+3. Read the plan. nullius adopt <planId> proj
+4. nullius run proj            # if it pauses: read the intervention,
+                               #   nullius steer "..." proj, then run again
+5. nullius verify proj --json  # exit 0 = every number/citation is traceable
+6. Repeat 4-5 until exit 0, then nullius export md proj
+```
+
+The agent never needs your API keys (they stay in the OS keychain), cannot write to the manuscript directly (only gated patches can), and the human approval step (`adopt`) stays yours if you want it to.
+
 ## How it is built
 
 TypeScript monorepo: `packages/core` (gates + orchestrator, UI-independent), `packages/conformance` (language-independent JSON test vectors — the spec), `packages/cli`, `packages/server` (HTTP/WebSocket), `apps/desktop` (Tauri v2 + React). Generated Python runs by default in a **WebAssembly sandbox** (Pyodide) where network access is structurally absent — no Docker required, identical on all three OSes; macOS `sandbox-exec` and Docker backends are available for full CPython. If no sandbox can be established, execution is refused, never downgraded.
