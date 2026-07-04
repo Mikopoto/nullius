@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { invoke } from "@tauri-apps/api/core";
 import { Background, Controls, MiniMap, ReactFlow, type Edge, type Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { create } from "zustand";
@@ -7,6 +8,15 @@ import "./styles.css";
 
 type Role = "planner" | "executor" | "reviewer" | "synthesizer" | "system" | "user";
 type Panel = "setup" | "manuscript" | "readiness" | "graph" | "evidence" | "citations";
+
+interface StreamLine {
+  key: string;
+  role: Role;
+  purpose: string;
+  content: string;
+  reasoning: string;
+  usage?: { promptTokens?: number; completionTokens?: number; reasoningTokens?: number };
+}
 
 interface TimelineEvent {
   id: number;
@@ -52,6 +62,7 @@ interface AppState {
   busy: boolean;
   status: string;
   events: TimelineEvent[];
+  streamLines: StreamLine[];
   consoleQuery: string;
   consoleRoleFilter: "all" | Role;
   intervention: { title: string; detail: string } | undefined;
@@ -63,6 +74,7 @@ interface AppState {
   setConsoleQuery: (value: string) => void;
   setConsoleRoleFilter: (value: "all" | Role) => void;
   appendEvent: (event: TimelineEvent) => void;
+  appendStreamDelta: (event: { runId: string; role: Role; purpose: string; kind: string; text?: string; usage?: StreamLine["usage"] }) => void;
   refreshSnapshot: () => Promise<void>;
   stopRun: () => Promise<void>;
   resumeRun: () => Promise<void>;
@@ -86,6 +98,7 @@ const useAppState = create<AppState>((set, get) => ({
   busy: false,
   status: "Start `node packages/cli/dist/index.js serve --port 8787`, then connect.",
   events: [],
+  streamLines: [],
   consoleQuery: "",
   consoleRoleFilter: "all",
   intervention: undefined,
@@ -96,6 +109,19 @@ const useAppState = create<AppState>((set, get) => ({
   setConsoleQuery: (value) => set({ consoleQuery: value }),
   setConsoleRoleFilter: (value) => set({ consoleRoleFilter: value }),
   appendEvent: (event) => set((state) => ({ events: [...state.events, event] })),
+  appendStreamDelta: (event) => set((state) => {
+    const key = `${event.runId}:${event.role}:${event.purpose}`;
+    const existing = state.streamLines.find((line) => line.key === key);
+    const line: StreamLine = existing ?? { key, role: event.role, purpose: event.purpose, content: "", reasoning: "" };
+    const nextUsage = event.kind === "usage" ? event.usage : line.usage;
+    const updated: StreamLine = {
+      ...line,
+      content: line.content + (event.kind === "content" ? event.text ?? "" : ""),
+      reasoning: line.reasoning + (event.kind === "reasoning" ? event.text ?? "" : ""),
+      ...(nextUsage ? { usage: nextUsage } : {})
+    };
+    return { streamLines: existing ? state.streamLines.map((item) => item.key === key ? updated : item) : [...state.streamLines, updated] };
+  }),
   command: async (command, payload) => {
     const response = await fetch(`${get().serverUrl}/command`, {
       method: "POST",
@@ -239,18 +265,39 @@ function App() {
   const appendEvent = useAppState((state) => state.appendEvent);
 
   useEffect(() => {
+    void invoke("ensure_local_server", { port: 8787 }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     const url = serverUrl.replace(/^http/, "ws");
     let socket: WebSocket | undefined;
+    const pendingStream: Array<{ runId: string; role: Role; purpose: string; kind: string; text?: string; usage?: StreamLine["usage"] }> = [];
+    const flush = () => {
+      if (pendingStream.length === 0) return;
+      const batch = pendingStream.splice(0);
+      const appendStreamDelta = useAppState.getState().appendStreamDelta;
+      for (const item of batch) appendStreamDelta(item);
+    };
+    const interval = window.setInterval(flush, 67);
     try {
       socket = new WebSocket(url);
       socket.onmessage = (message) => {
         const payload = JSON.parse(message.data as string) as {
           type?: string;
           readiness?: Readiness;
+          runId?: string;
+          role?: Role;
+          purpose?: string;
+          kind?: string;
+          text?: string;
+          usage?: StreamLine["usage"];
           event?: { seq: number; role: Role; kind: string; title: string; detail?: string };
         };
         if (payload.type === "state.changed") {
           useAppState.setState({ readiness: payload.readiness });
+        }
+        if (payload.type === "stream.delta" && payload.runId && payload.role && payload.purpose && payload.kind) {
+          pendingStream.push({ runId: payload.runId, role: payload.role, purpose: payload.purpose, kind: payload.kind, ...(payload.text ? { text: payload.text } : {}), ...(payload.usage ? { usage: payload.usage } : {}) });
         }
         if (payload.type === "intervention.required" && payload.event) {
           useAppState.setState({ intervention: { title: payload.event.title, detail: payload.event.detail ?? "" }, status: payload.event.title });
@@ -269,7 +316,11 @@ function App() {
     } catch {
       // HTTP-only usage is acceptable; the console will stay static until a run emits events.
     }
-    return () => socket?.close();
+    return () => {
+      window.clearInterval(interval);
+      flush();
+      socket?.close();
+    };
   }, [serverUrl, appendEvent]);
 
   return (
@@ -507,6 +558,7 @@ function CitationPanel() {
 
 function MissionConsole() {
   const events = useAppState((state) => state.events);
+  const streamLines = useAppState((state) => state.streamLines);
   const status = useAppState((state) => state.status);
   const query = useAppState((state) => state.consoleQuery);
   const roleFilter = useAppState((state) => state.consoleRoleFilter);
@@ -544,6 +596,20 @@ function MissionConsole() {
           <option value="system">System</option>
           <option value="user">User</option>
         </select>
+      </div>
+      <div className="stream-stack">
+        {streamLines.map((line) => (
+          <section className={`stream-card ${line.role}`} key={line.key}>
+            <div className="event-top">
+              <strong>{line.role}</strong>
+              <em>{line.purpose}</em>
+              <span className="live-caret">▍</span>
+            </div>
+            {line.content ? <p>{line.content}</p> : null}
+            {line.reasoning ? <details className="reasoning"><summary>Reasoning</summary><p>{line.reasoning}</p></details> : null}
+            {line.usage ? <div className="usage-badges"><span>prompt {line.usage.promptTokens ?? 0}</span><span>completion {line.usage.completionTokens ?? 0}</span><span>reasoning {line.usage.reasoningTokens ?? 0}</span></div> : null}
+          </section>
+        ))}
       </div>
       <div className="timeline">
         {filteredEvents.length === 0 ? <p className="muted-console">No matching live events.</p> : filteredEvents.map((event) => (

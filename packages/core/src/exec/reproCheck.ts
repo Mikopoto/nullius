@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -34,7 +35,12 @@ export async function checkProjectReproducibility(root: string, backend: Executi
       try {
         const originalNodeDir = join(root, "lanes", lane.id, "nodes", node.id);
         await cp(originalNodeDir, stage, { recursive: true, force: true });
-        await removeRecordedArtifacts(stage, evidence.map((item) => item.path).filter((path): path is string => Boolean(path)));
+        const remainingRecordedArtifacts = await removeRecordedArtifacts(stage, evidence.map((item) => item.path).filter((path): path is string => Boolean(path)));
+        if (remainingRecordedArtifacts.length > 0) {
+          await saveNode(root, lane.id, { ...node, reproducibility: "failed" }, nodeNarrative(node.title, node.generatedCode, "Reproducibility staging failed."));
+          nodes.push({ nodeId: node.id, status: "failed", reason: `recorded artifacts could not be removed from staging: ${remainingRecordedArtifacts.join(", ")}` });
+          continue;
+        }
         const result = await backend.run(node.generatedCode, stage, { allowNetwork: false, timeoutSec: 30 });
         if (result.status !== "succeeded") {
           await saveNode(root, lane.id, { ...node, reproducibility: "failed" }, nodeNarrative(node.title, node.generatedCode, "Reproducibility run failed."));
@@ -67,18 +73,22 @@ export async function checkProjectReproducibility(root: string, backend: Executi
   };
 }
 
-async function removeRecordedArtifacts(stage: string, paths: string[]): Promise<void> {
+async function removeRecordedArtifacts(stage: string, paths: string[]): Promise<string[]> {
   const uniquePaths = new Set([
     ...paths,
     "logs/stdout.log",
     "logs/stderr.log",
     "logs/git.diff"
   ]);
+  const remaining: string[] = [];
   for (const relative of uniquePaths) {
     if (relative.split("/").some((part) => part === ".." || part.length === 0)) continue;
-    await rm(join(stage, relative), { recursive: true, force: true });
-    await rm(dirname(join(stage, relative)), { recursive: false, force: true }).catch(() => undefined);
+    const target = join(stage, relative);
+    await rm(target, { recursive: true, force: true }).catch(() => undefined);
+    if (existsSync(target)) remaining.push(relative);
+    await rm(dirname(target), { recursive: false, force: true }).catch(() => undefined);
   }
+  return remaining;
 }
 
 function nodeNarrative(title: string, code: string, detail: string): string {

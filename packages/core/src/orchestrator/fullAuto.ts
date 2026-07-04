@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { readFile, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExecutionBackend, ExecutionResult } from "../exec/executionBackend.js";
 import { defaultExecutionBackend } from "../exec/executionBackend.js";
+import type { Usage } from "../providers/streamParser.js";
 import {
   applyPatchIfValid,
   readinessReport,
@@ -35,6 +37,8 @@ export type FullAutoEventKind =
   | "node.generated"
   | "node.executed"
   | "review.completed"
+  | "selfCorrection.started"
+  | "selfCorrection.completed"
   | "patch.staged"
   | "patch.applied"
   | "steering.consumed"
@@ -61,11 +65,30 @@ export interface SynthesisDraft {
   body: string;
 }
 
+export type AgentStreamDelta =
+  | { type: "content" | "reasoning"; text: string }
+  | { type: "usage"; usage: Usage }
+  | { type: "done" };
+
+export interface AgentCallOptions {
+  onStream?: (delta: AgentStreamDelta) => void;
+}
+
 export interface ResearchAgents {
-  createPlan(question: string): Promise<Plan>;
-  createExecutorDraft(plan: Plan): Promise<ExecutorDraft>;
-  reviewNode(context: { draft: ExecutorDraft; exitCode: number; stdout: string; stderr: string }): Promise<NodeReview>;
-  synthesize(context: { plan: Plan; claim: Claim; evidence: EvidenceItem[] }): Promise<SynthesisDraft>;
+  createPlan(question: string, options?: AgentCallOptions): Promise<Plan>;
+  createExecutorDraft(plan: Plan, options?: AgentCallOptions): Promise<ExecutorDraft>;
+  reviseExecutorDraft?(context: { plan: Plan; draft: ExecutorDraft; review: NodeReview; execution: ExecutionResult }, options?: AgentCallOptions): Promise<ExecutorDraft>;
+  reviewNode(context: { draft: ExecutorDraft; exitCode: number; stdout: string; stderr: string }, options?: AgentCallOptions): Promise<NodeReview>;
+  synthesize(context: { plan: Plan; claim: Claim; evidence: EvidenceItem[] }, options?: AgentCallOptions): Promise<SynthesisDraft>;
+}
+
+export interface FullAutoStreamEvent {
+  runId: string;
+  role: FullAutoEvent["role"];
+  purpose: string;
+  kind: "content" | "reasoning" | "usage" | "done";
+  text?: string;
+  usage?: Usage;
 }
 
 export interface FullAutoResult {
@@ -99,7 +122,16 @@ export class FullAutoOrchestrator {
     this.transcriptStore = options.transcriptStore ?? new RunTranscriptStore();
   }
 
-  async runOnce(root: string, agents: ResearchAgents, onEvent?: (event: FullAutoEvent) => void, options: { signal?: AbortSignal } = {}): Promise<FullAutoResult> {
+  async runOnce(root: string, agents: ResearchAgents, onEvent?: (event: FullAutoEvent) => void, options: { signal?: AbortSignal; onStream?: (event: FullAutoStreamEvent) => void } = {}): Promise<FullAutoResult> {
+    const releaseLock = await acquireProjectRunLock(root, randomUUID());
+    try {
+      return await this.runOnceUnlocked(root, agents, onEvent, options);
+    } finally {
+      await releaseLock();
+    }
+  }
+
+  private async runOnceUnlocked(root: string, agents: ResearchAgents, onEvent?: (event: FullAutoEvent) => void, options: { signal?: AbortSignal; onStream?: (event: FullAutoStreamEvent) => void } = {}): Promise<FullAutoResult> {
     const runId = randomUUID();
     const events: FullAutoEvent[] = [];
     let seq = 0;
@@ -109,6 +141,24 @@ export class FullAutoOrchestrator {
       onEvent?.(full);
       await this.transcriptStore.append(root, runId, { kind: "event", role: full.role, text: `${full.title}${full.detail ? `\n${full.detail}` : ""}` });
     };
+    const streamOptions = (role: FullAutoEvent["role"], purpose: string): AgentCallOptions => ({
+      onStream: (delta) => {
+        const kind = delta.type;
+        options.onStream?.({
+          runId,
+          role,
+          purpose,
+          kind,
+          ...(delta.type === "content" || delta.type === "reasoning" ? { text: delta.text } : {}),
+          ...(delta.type === "usage" ? { usage: delta.usage } : {})
+        });
+        void this.transcriptStore.append(root, runId, {
+          kind: delta.type === "reasoning" ? "reasoning" : delta.type === "usage" ? "usage" : "delta",
+          role,
+          text: delta.type === "usage" ? JSON.stringify(delta.usage) : delta.type === "done" ? "[done]" : delta.text
+        });
+      }
+    });
 
     let snapshot = await loadProject(root);
     const steering = await consumeSteering(root);
@@ -118,7 +168,7 @@ export class FullAutoOrchestrator {
 
     const approvedPlans = snapshot.plans.filter((plan) => plan.approved);
     if (approvedPlans.length === 0) {
-      const candidate = { ...(await agents.createPlan(withSteering(snapshot.manifest.question, steering))), approved: false };
+      const candidate = { ...(await agents.createPlan(withSteering(snapshot.manifest.question, steering), streamOptions("planner", "planning"))), approved: false };
       await savePlan(root, candidate);
       await emit({ kind: "plan.created", role: "planner", title: "Plan candidate created", detail: `${candidate.title}\nAdopt a plan before Full Auto can execute it.` });
       await emit({ kind: "intervention.required", role: "system", title: "Plan adoption required", detail: "Nullius will not lock a protocol or execute research from an unapproved AI plan." });
@@ -152,12 +202,12 @@ export class FullAutoOrchestrator {
     }
 
     const produced = await Promise.all(
-      eligible.map(({ lane, plan }) => this.produceNode(root, runId, lane, withPlanSteering(plan, steering), agents, emit, options.signal))
+      eligible.map(({ lane, plan }) => this.produceNode(root, runId, lane, withPlanSteering(plan, steering), agents, emit, streamOptions, manifest.settings.selfCorrectionRounds, options.signal))
     );
 
     let lastPatch: Patch | undefined;
     for (const item of produced) {
-      const patch = await this.applyProducedNode(root, item, emit);
+      const patch = await this.applyProducedNode(root, item, emit, streamOptions);
       if (patch) lastPatch = patch;
     }
 
@@ -167,8 +217,8 @@ export class FullAutoOrchestrator {
     return lastPatch ? { runId, ready, patch: lastPatch, events } : { runId, ready, events };
   }
 
-  private async produceNode(root: string, runId: string, lane: LoadedLane, plan: Plan, agents: ResearchAgents, emit: Emit, signal?: AbortSignal): Promise<ProducedNode> {
-    const draft = await agents.createExecutorDraft(plan);
+  private async produceNode(root: string, runId: string, lane: LoadedLane, plan: Plan, agents: ResearchAgents, emit: Emit, streamOptions: (role: FullAutoEvent["role"], purpose: string) => AgentCallOptions, selfCorrectionRounds: number, signal?: AbortSignal): Promise<ProducedNode> {
+    let draft = await agents.createExecutorDraft(plan, streamOptions("executor", "nodeExecution"));
     const node: NodeRecord = {
       id: randomUUID(),
       title: draft.title,
@@ -182,21 +232,53 @@ export class FullAutoOrchestrator {
     await saveNode(root, lane.id, node, nodeNarrative(node, "Generated; execution pending."));
     await emit({ kind: "node.generated", role: "executor", title: "Node generated", detail: `${lane.name}: ${draft.title}` });
 
-    const started = Date.now();
     const nodeDir = join(root, "lanes", lane.id, "nodes", node.id);
     const executionOptions = signal
       ? { allowNetwork: false, timeoutSec: 30, signal }
       : { allowNetwork: false, timeoutSec: 30 };
-    const execution = await this.backend.run(draft.code, nodeDir, executionOptions);
-    node.status = execution.status === "succeeded" ? "completed" : "error";
-    node.executionRecord = {
-      exitCode: execution.exitCode,
-      startedAt: new Date(started).toISOString(),
-      durationMs: Date.now() - started,
-      backend: execution.backend
-    };
-    await saveNode(root, lane.id, node, nodeNarrative(node, execution.stdout || execution.stderr));
-    await emit({ kind: "node.executed", role: "executor", title: execution.status === "succeeded" ? "Node executed" : "Execution failed", detail: execution.stderr || execution.stdout });
+    let execution: ExecutionResult | undefined;
+    let review: NodeReview | undefined;
+    let started = Date.now();
+    const maxCorrectionRounds = Math.max(0, selfCorrectionRounds);
+
+    for (let attempt = 0; attempt <= maxCorrectionRounds; attempt += 1) {
+      started = Date.now();
+      node.generatedCode = draft.code;
+      node.status = "running";
+      await saveNode(root, lane.id, node, nodeNarrative(node, attempt === 0 ? "Executing." : `Executing corrected draft round ${attempt}.`));
+      execution = await this.backend.run(draft.code, nodeDir, executionOptions);
+      node.status = execution.status === "succeeded" ? "completed" : "error";
+      node.executionRecord = {
+        exitCode: execution.exitCode,
+        startedAt: new Date(started).toISOString(),
+        durationMs: Date.now() - started,
+        backend: execution.backend
+      };
+      await saveNode(root, lane.id, node, nodeNarrative(node, execution.stdout || execution.stderr));
+      await emit({ kind: "node.executed", role: "executor", title: execution.status === "succeeded" ? "Node executed" : "Execution failed", detail: execution.stderr || execution.stdout });
+
+      review = await agents.reviewNode({ draft, exitCode: execution.exitCode, stdout: execution.stdout, stderr: execution.stderr }, streamOptions("reviewer", "review"));
+      node.review = review;
+      await saveNode(root, lane.id, node, nodeNarrative(node, review.summary));
+      await emit({ kind: "review.completed", role: "reviewer", title: "Review completed", detail: review.summary });
+
+      if (execution.status === "succeeded" && (review.severity === "clear" || review.severity === "info")) break;
+      if (attempt >= maxCorrectionRounds || !agents.reviseExecutorDraft) break;
+
+      await emit({
+        kind: "selfCorrection.started",
+        role: "executor",
+        title: `Self-correction round ${attempt + 1}`,
+        detail: [...review.concerns, execution.stderr].filter(Boolean).join("\n") || review.summary
+      });
+      draft = await agents.reviseExecutorDraft({ plan, draft, review, execution }, streamOptions("executor", "selfCorrection"));
+      node.title = draft.title;
+      node.generatedCode = draft.code;
+      await saveNode(root, lane.id, node, nodeNarrative(node, "Corrected draft generated; execution pending."));
+      await emit({ kind: "selfCorrection.completed", role: "executor", title: "Corrected draft generated", detail: draft.title });
+    }
+
+    if (!execution || !review) throw new Error("Full Auto failed before node execution completed.");
 
     const nodeRelativeDir = join("lanes", lane.id, "nodes", node.id);
     const gitDiffPath = join(nodeRelativeDir, "logs", "git.diff");
@@ -233,15 +315,10 @@ export class FullAutoOrchestrator {
       agentRunResultId: agentRunResult.id
     };
 
-    const review = await agents.reviewNode({ draft, exitCode: execution.exitCode, stdout: execution.stdout, stderr: execution.stderr });
-    node.review = review;
-    await saveNode(root, lane.id, node, nodeNarrative(node, review.summary));
-    await emit({ kind: "review.completed", role: "reviewer", title: "Review completed", detail: review.summary });
-
     return { agents, lane, plan, node, draft, execution, review, sourceActivity, agentRunResult };
   }
 
-  private async applyProducedNode(root: string, item: ProducedNode, emit: Emit): Promise<Patch | undefined> {
+  private async applyProducedNode(root: string, item: ProducedNode, emit: Emit, streamOptions: (role: FullAutoEvent["role"], purpose: string) => AgentCallOptions): Promise<Patch | undefined> {
     const beforeAppend = await loadProject(root);
     await saveAgentRunResults(root, [...beforeAppend.agentRunResults, item.agentRunResult]);
     await saveSourceActivities(root, [...beforeAppend.sourceActivities, item.sourceActivity]);
@@ -303,7 +380,7 @@ export class FullAutoOrchestrator {
       return undefined;
     }
 
-    const synthesis = await item.agents.synthesize({ plan: item.plan, claim, evidence });
+    const synthesis = await item.agents.synthesize({ plan: item.plan, claim, evidence }, streamOptions("synthesizer", "synthesis"));
     const patchSnapshot = await loadProject(root);
     const projectForPatch = {
       ...snapshotToGateProject(patchSnapshot),
@@ -328,6 +405,23 @@ export class FullAutoOrchestrator {
     }
     return patch;
   }
+}
+
+async function acquireProjectRunLock(root: string, id: string): Promise<() => Promise<void>> {
+  const runtimeDir = join(root, "runtime");
+  const lockPath = join(runtimeDir, "run.lock");
+  await mkdir(runtimeDir, { recursive: true });
+  try {
+    await writeFile(lockPath, JSON.stringify({ id, pid: process.pid, startedAt: new Date().toISOString() }, null, 2), { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`Another Nullius run is already active for this project: ${lockPath}`);
+    }
+    throw error;
+  }
+  return async () => {
+    await rm(lockPath, { force: true });
+  };
 }
 
 async function ensureLanesForApprovedPlans(root: string, snapshot: ProjectSnapshot, approvedPlans: Plan[], emit: Emit): Promise<void> {
@@ -406,7 +500,8 @@ export class MockResearchAgents implements ResearchAgents {
     this.fabricated = options.fabricated ?? false;
   }
 
-  async createPlan(question: string): Promise<Plan> {
+  async createPlan(question: string, options?: AgentCallOptions): Promise<Plan> {
+    options?.onStream?.({ type: "content", text: "Planning synthetic slope check." });
     return {
       id: randomUUID(),
       title: "Synthetic slope check",
@@ -419,7 +514,8 @@ export class MockResearchAgents implements ResearchAgents {
     };
   }
 
-  async createExecutorDraft(): Promise<ExecutorDraft> {
+  async createExecutorDraft(_plan?: Plan, options?: AgentCallOptions): Promise<ExecutorDraft> {
+    options?.onStream?.({ type: "content", text: "Generating executor code." });
     return {
       title: "Fit slope",
       code: [
@@ -433,7 +529,8 @@ export class MockResearchAgents implements ResearchAgents {
     };
   }
 
-  async reviewNode(context: { exitCode: number; stderr: string }): Promise<NodeReview> {
+  async reviewNode(context: { exitCode: number; stderr: string }, options?: AgentCallOptions): Promise<NodeReview> {
+    options?.onStream?.({ type: "reasoning", text: context.exitCode === 0 ? "Artifact is present." : "Execution failed." });
     return {
       severity: context.exitCode === 0 ? "clear" : "critical",
       findings: context.exitCode === 0 ? ["Execution completed."] : [],
@@ -442,7 +539,9 @@ export class MockResearchAgents implements ResearchAgents {
     };
   }
 
-  async synthesize(): Promise<SynthesisDraft> {
+  async synthesize(_context?: { plan: Plan; claim: Claim; evidence: EvidenceItem[] }, options?: AgentCallOptions): Promise<SynthesisDraft> {
+    options?.onStream?.({ type: "content", text: "Writing evidence-backed manuscript." });
+    options?.onStream?.({ type: "usage", usage: { promptTokens: 10, completionTokens: 20, reasoningTokens: 3 } });
     const result = this.fabricated ? "9.4142" : "2.0";
     return {
       title: "Synthetic slope study",

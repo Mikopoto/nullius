@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -35,6 +35,18 @@ async function adoptMockPlan(root: string): Promise<void> {
 }
 
 describe("FullAutoOrchestrator", () => {
+
+  it("rejects a second run when a project run lock exists", async () => {
+    const root = await makeProject();
+    try {
+      await mkdir(join(root, "runtime"), { recursive: true });
+      await writeFile(join(root, "runtime", "run.lock"), "locked", "utf8");
+      await expect(new FullAutoOrchestrator().runOnce(root, new MockResearchAgents())).rejects.toThrow(/already active/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("creates a plan candidate and stops when no plan has been adopted", async () => {
     const root = await makeProject();
     try {
@@ -64,6 +76,37 @@ describe("FullAutoOrchestrator", () => {
       const repro = await checkProjectReproducibility(root);
       expect(repro.reproduced).toBe(1);
       expect(repro.divergent + repro.failed).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+
+  it("self-corrects a reviewed execution failure before pausing", async () => {
+    class SelfCorrectingAgents extends MockResearchAgents {
+      async createExecutorDraft() {
+        return {
+          title: "Broken slope fit",
+          code: "raise RuntimeError('missing artifact')",
+          claimText: "The fit slope is 2.0."
+        };
+      }
+
+      async reviseExecutorDraft() {
+        return super.createExecutorDraft();
+      }
+    }
+
+    const root = await makeProject();
+    try {
+      await adoptMockPlan(root);
+      const result = await new FullAutoOrchestrator().runOnce(root, new SelfCorrectingAgents());
+      expect(result.events.map((event) => event.kind)).toContain("selfCorrection.started");
+      expect(result.events.map((event) => event.kind)).toContain("selfCorrection.completed");
+      expect(result.events.map((event) => event.kind)).toContain("patch.applied");
+      const snapshot = await loadProject(root);
+      expect(snapshot.lanes[0]?.nodes[0]?.review?.severity).toBe("clear");
+      expect(snapshot.manuscriptBody).toContain("The fit slope is 2.0.");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -1,0 +1,20 @@
+{
+  "suite": "transport-policy",
+  "cases": [
+    {
+      "name": "negative numeric retry-after is invalid",
+      "input": { "operation": "retryAfterSeconds", "headers": { "Retry-After": "-4" } },
+      "expect": { "value": null }
+    },
+    {
+      "name": "numeric retry-after is honored",
+      "input": { "operation": "retryAfterSeconds", "headers": { "Retry-After": "7" } },
+      "expect": { "value": 7 }
+    },
+    {
+      "name": "delay is capped at 120 seconds",
+      "input": { "operation": "delayForAttempt", "attempt": 0, "retryAfter": 100000, "jitter": 0 },
+      "expect": { "value": 120 }
+    }
+  ]
+}

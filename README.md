@@ -18,9 +18,9 @@ Current implementation status:
 - M2 deterministic gates: numeric grounding, citation-key extraction, citation verification helpers, claim/readiness gates, patch write boundary, and canonical reproducibility text comparison
 - M3 provider utilities: retry policy, SSE stream parsing, defensive JSON parsing, usage/cost helpers, OpenAI/OpenRouter/Anthropic/custom-compatible request construction
 - M4 default Docker-free execution backend via Pyodide; generated artifacts and stdout/stderr logs are persisted into node folders
-- M5 Full Auto orchestration: explicit plan adoption before protocol lock, lane/node budget handling, execution, review, evidence normalization, claim creation, manuscript patch staging/apply, transcript events
-- M6 HTTP/WebSocket server and CLI commands for `init`, `plan`, `adopt`, `run`, `verify`, `watch`, `approve`, `reject`, `steer`, `citations`, `repro`, `rerun`, `export`, `keys`, and `serve`
-- M7 Tauri + React GUI with Setup, Mission Console, intervention/status controls, manuscript/patch preview, readiness gates, DAG canvas, evidence inspector, and citation manager
+- M5 Full Auto orchestration: explicit plan adoption before protocol lock, lane/node budget handling, execution, review, bounded self-correction rounds, evidence normalization, claim creation, manuscript patch staging/apply, transcript events, and project run locks
+- M6 HTTP/WebSocket server and CLI commands for `init`, `plan`, `adopt`, `run`, `verify`, `watch`, `approve`, `reject`, `steer`, `citations`, `repro`, `rerun`, `export`, `keys`, and `serve`; WebSocket emits phase events plus `stream.delta` messages
+- M7 Tauri + React GUI with Setup, Mission Console live stream cards, reasoning foldouts, token badges, intervention/status controls, manuscript/patch preview, readiness gates, DAG canvas, evidence inspector, citation manager, and local server auto-start in Tauri builds
 - Role-separated real agent adapter for OpenRouter, OpenAI, Anthropic, custom OpenAI-compatible endpoints, Codex CLI, Claude Code, and OpenCode
 - Execution backend selection for Pyodide, macOS `sandbox-exec`, and Docker
 - Project-local macOS run entrypoint at `script/build_and_run.sh` and Codex Run action metadata
@@ -85,4 +85,4 @@ Known remaining release work:
 
 - DMG/notarized distribution is not enabled; the checked target is the `.app` bundle.
 - PDF export delegates to installed Quarto/Pandoc/LaTeX; no document toolchain is bundled.
-- The GUI currently talks to the local server at `127.0.0.1:8787`; release-grade embedded sidecar packaging can replace this dev-local server launch.
+- The Tauri app can auto-start the local server from a repository build tree. Fully self-contained distribution still needs a packaged Node/server binary sidecar for machines without this repo checkout.

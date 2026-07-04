@@ -163,7 +163,10 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
             broadcast({ schemaVersion: 1, type: "run.event", event });
             if (event.kind === "intervention.required") broadcast({ schemaVersion: 1, type: "intervention.required", event, root: payload.root });
           },
-          { signal: controller.signal }
+          {
+            signal: controller.signal,
+            onStream: (event) => broadcast({ schemaVersion: 1, type: "stream.delta", ...event, root: payload.root })
+          }
         );
         activeRuns.delete(payload.root);
         await broadcastStateChanged(parsed.command, payload.root);
@@ -183,7 +186,10 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
             broadcast({ schemaVersion: 1, type: "run.event", event });
             if (event.kind === "intervention.required") broadcast({ schemaVersion: 1, type: "intervention.required", event, root: payload.root });
           },
-          { signal: controller.signal }
+          {
+            signal: controller.signal,
+            onStream: (event) => broadcast({ schemaVersion: 1, type: "stream.delta", ...event, root: payload.root })
+          }
         );
         activeRuns.delete(payload.root);
         await broadcastStateChanged(parsed.command, payload.root);

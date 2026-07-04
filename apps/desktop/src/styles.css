@@ -464,3 +464,63 @@ textarea {
   gap: 8px;
   margin-top: 10px;
 }
+
+.stream-stack {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.stream-card {
+  border: 1px solid #263241;
+  border-left: 3px solid #64748b;
+  background: #0f1720;
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.stream-card.executor { border-left-color: #55d6ff; }
+.stream-card.reviewer { border-left-color: #f0b85a; }
+.stream-card.planner { border-left-color: #79a8ff; }
+.stream-card.synthesizer { border-left-color: #b892ff; }
+
+.stream-card p {
+  white-space: pre-wrap;
+  color: #d7e0ea;
+  line-height: 1.45;
+}
+
+.reasoning {
+  border-top: 1px solid #263241;
+  margin-top: 10px;
+  padding-top: 8px;
+  color: #c4b5fd;
+}
+
+.reasoning summary {
+  cursor: pointer;
+  color: #b892ff;
+}
+
+.usage-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.usage-badges span {
+  border: 1px solid #263241;
+  border-radius: 999px;
+  color: #9daaba;
+  padding: 3px 8px;
+}
+
+.live-caret {
+  animation: blink-caret 1s steps(2, start) infinite;
+  color: #55d6ff;
+}
+
+@keyframes blink-caret {
+  50% { opacity: 0; }
+}

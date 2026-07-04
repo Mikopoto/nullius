@@ -47,6 +47,42 @@ describe("Nullius server", () => {
       await rm(root, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("broadcasts stream.delta messages during a run", async () => {
+    const root = await mkdtemp(join(tmpdir(), "nullius-server-stream-"));
+    const server = await startNulliusServer();
+    const socket = new WebSocket(`ws://127.0.0.1:${server.port}`);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once("open", resolve);
+        socket.once("error", reject);
+      });
+      await server.command({ schemaVersion: 1, command: "project.create", payload: { root, manifest: manifest() } });
+      const snapshot = await loadProject(root);
+      await server.command({ schemaVersion: 1, command: "run.start", payload: { root, mock: true } });
+      const adoptedSnapshot = await loadProject(root);
+      const planId = adoptedSnapshot.plans[0]?.id ?? snapshot.plans[0]?.id;
+      expect(planId).toBeTruthy();
+      await server.command({ schemaVersion: 1, command: "plan.adopt", payload: { root, planId } });
+      const streamPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("stream.delta not received")), 10_000);
+        socket.on("message", (data) => {
+          const message = JSON.parse(String(data)) as Record<string, unknown>;
+          if (message.type === "stream.delta") {
+            clearTimeout(timer);
+            resolve(message);
+          }
+        });
+      });
+      await server.command({ schemaVersion: 1, command: "run.start", payload: { root, mock: true } });
+      await expect(streamPromise).resolves.toMatchObject({ type: "stream.delta", root, role: "executor" });
+    } finally {
+      socket.close();
+      await server.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("restricts CORS to local app origins", async () => {
     const server = await startNulliusServer();
     try {

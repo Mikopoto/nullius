@@ -11,7 +11,7 @@ import {
   type ProjectManifest
 } from "../model/schemas.js";
 import type { Claim } from "../model/schemas.js";
-import type { ExecutorDraft, ResearchAgents, SynthesisDraft } from "./fullAuto.js";
+import type { AgentCallOptions, ExecutorDraft, ResearchAgents, SynthesisDraft } from "./fullAuto.js";
 
 type AgentRole = z.infer<typeof AgentRoleSchema>;
 
@@ -47,7 +47,7 @@ export class RoleSeparatedResearchAgents implements ResearchAgents {
     this.terminalTimeoutMs = terminalTimeoutMs;
   }
 
-  async createPlan(question: string) {
+  async createPlan(question: string, options?: AgentCallOptions) {
     const json = await this.completeStructured(
       this.manifest.roles.planner,
       "planner",
@@ -63,7 +63,7 @@ export class RoleSeparatedResearchAgents implements ResearchAgents {
     return parsed;
   }
 
-  async createExecutorDraft(plan: z.infer<typeof PlanSchema>): Promise<ExecutorDraft> {
+  async createExecutorDraft(plan: z.infer<typeof PlanSchema>, options?: AgentCallOptions): Promise<ExecutorDraft> {
     const json = await this.completeStructured(
       this.manifest.roles.executor,
       "executor",
@@ -79,7 +79,23 @@ export class RoleSeparatedResearchAgents implements ResearchAgents {
     return ExecutorDraftSchema.parse(json);
   }
 
-  async reviewNode(context: { draft: ExecutorDraft; exitCode: number; stdout: string; stderr: string }) {
+  async reviseExecutorDraft(context: { plan: z.infer<typeof PlanSchema>; draft: ExecutorDraft; review: z.infer<typeof NodeReviewSchema>; execution: { exitCode: number; stdout: string; stderr: string } }, options?: AgentCallOptions): Promise<ExecutorDraft> {
+    const json = await this.completeStructured(
+      this.manifest.roles.executor,
+      "selfCorrection",
+      [
+        "You are the main executor repairing a Nullius node after independent review.",
+        "Return only JSON matching this shape:",
+        '{"title":"string","code":"python code string","claimText":"one result claim that the generated code can actually support"}',
+        "Fix the code or claim so the next execution can pass review. Do not fabricate outputs."
+      ].join("\n"),
+      `Approved plan, previous draft, execution result, and reviewer concerns:\n${JSON.stringify(context, null, 2)}`,
+      options
+    );
+    return ExecutorDraftSchema.parse(json);
+  }
+
+  async reviewNode(context: { draft: ExecutorDraft; exitCode: number; stdout: string; stderr: string }, options?: AgentCallOptions) {
     const json = await this.completeStructured(
       this.manifest.roles.reviewer,
       "reviewer",
@@ -94,7 +110,7 @@ export class RoleSeparatedResearchAgents implements ResearchAgents {
     return NodeReviewSchema.parse(json);
   }
 
-  async synthesize(context: { plan: z.infer<typeof PlanSchema>; claim: Claim; evidence: EvidenceItem[] }): Promise<SynthesisDraft> {
+  async synthesize(context: { plan: z.infer<typeof PlanSchema>; claim: Claim; evidence: EvidenceItem[] }, options?: AgentCallOptions): Promise<SynthesisDraft> {
     const json = await this.completeStructured(
       this.manifest.roles.executor,
       "synthesizer",
@@ -110,12 +126,12 @@ export class RoleSeparatedResearchAgents implements ResearchAgents {
     return SynthesisDraftSchema.parse(json);
   }
 
-  private async completeStructured(role: AgentRole, purpose: string, systemPrompt: string, userPrompt: string): Promise<unknown> {
+  private async completeStructured(role: AgentRole, purpose: string, systemPrompt: string, userPrompt: string, options?: AgentCallOptions): Promise<unknown> {
     if (role.provider === "codexCli" || role.provider === "claudeCode" || role.provider === "opencode") {
-      return runTerminalJSONAgent(role, purpose, systemPrompt, userPrompt, this.env, this.terminalTimeoutMs);
+      return runTerminalJSONAgent(role, purpose, systemPrompt, userPrompt, this.env, this.terminalTimeoutMs, options);
     }
     const config = providerConfigFromRole(role, this.env);
-    return completeJSON(systemPrompt, userPrompt, config);
+    return completeJSON(systemPrompt, userPrompt, config, options?.onStream ? { stream: options.onStream } : {});
   }
 }
 
@@ -174,7 +190,8 @@ async function runTerminalJSONAgent(
   systemPrompt: string,
   userPrompt: string,
   env: NodeJS.ProcessEnv,
-  timeoutMs: number
+  timeoutMs: number,
+  options?: AgentCallOptions
 ): Promise<unknown> {
   const prompt = [
     systemPrompt,
@@ -184,7 +201,7 @@ async function runTerminalJSONAgent(
     userPrompt
   ].join("\n");
   const command = terminalCommand(role, purpose, prompt);
-  const result = await runProcess(command.cmd, command.args, env, timeoutMs);
+  const result = await runProcess(command.cmd, command.args, env, timeoutMs, options);
   if (result.exitCode !== 0) {
     throw new Error(`${role.provider} failed with exit code ${result.exitCode}: ${result.stderr || result.stdout}`);
   }
@@ -213,7 +230,7 @@ function terminalCommand(role: AgentRole, purpose: string, prompt: string): { cm
   }
 }
 
-function runProcess(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+function runProcess(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, options?: AgentCallOptions): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { env: { ...env }, stdio: ["ignore", "pipe", "pipe"] });
     const stdout: Buffer[] = [];
@@ -222,8 +239,14 @@ function runProcess(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeout
       child.kill("SIGKILL");
       resolve({ exitCode: 124, stdout: Buffer.concat(stdout).toString("utf8"), stderr: `${Buffer.concat(stderr).toString("utf8")}\nterminal agent timed out` });
     }, timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout.push(chunk);
+      options?.onStream?.({ type: "content", text: chunk.toString("utf8") });
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr.push(chunk);
+      options?.onStream?.({ type: "reasoning", text: chunk.toString("utf8") });
+    });
     child.on("error", (error) => {
       clearTimeout(timer);
       resolve({ exitCode: 127, stdout: Buffer.concat(stdout).toString("utf8"), stderr: String(error) });

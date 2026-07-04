@@ -13,7 +13,9 @@ import {
   titlesMatch,
   claimCanEnterManuscript,
   readinessReport,
-  stageManuscriptPatch
+  stageManuscriptPatch,
+  retryAfterSeconds,
+  delayForAttempt
 } from "@nullius/core";
 import type { ConformanceSuite } from "./index.js";
 
@@ -83,6 +85,22 @@ describe("conformance vectors", () => {
       expect(parser.usage?.completionTokens).toBe(testCase.expect.completionTokens);
       expect(parser.usage?.reasoningTokens).toBe(testCase.expect.reasoningTokens);
       expect(parser.isDone).toBe(testCase.expect.isDone);
+    });
+  }
+
+
+  const transport = loadSuite<
+    { operation: "retryAfterSeconds" | "delayForAttempt"; headers?: Record<string, string>; attempt?: number; retryAfter?: number; jitter?: number },
+    { value: number | null }
+  >("transport-policy.json");
+
+  for (const testCase of transport.cases) {
+    it(`${transport.suite}: ${testCase.name}`, () => {
+      if (testCase.input.operation === "retryAfterSeconds") {
+        expect(retryAfterSeconds(new Headers(testCase.input.headers ?? {})) ?? null).toBe(testCase.expect.value);
+      } else {
+        expect(delayForAttempt(testCase.input.attempt ?? 0, testCase.input.retryAfter, () => testCase.input.jitter ?? 0)).toBe(testCase.expect.value);
+      }
     });
   }
 

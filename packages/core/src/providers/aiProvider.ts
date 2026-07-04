@@ -38,7 +38,7 @@ export async function completeJSON<T>(
   systemPrompt: string,
   userPrompt: string,
   config: AIProviderConfig,
-  options: { fetchImpl?: typeof fetch } = {}
+  options: { fetchImpl?: typeof fetch; stream?: StreamSink } = {}
 ): Promise<T> {
   const completion = await complete(systemPrompt, userPrompt, config, options);
   return parseJSONFromResponse<T>(completion.text);
