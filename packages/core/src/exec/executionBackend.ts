@@ -339,7 +339,7 @@ function rejected(kind: ExecutionBackendKind, reason: string): ExecutionResult {
   };
 }
 
-function sandboxProfile(nodeDir: string): string {
+export function sandboxProfile(nodeDir: string): string {
   const escapedNodeDir = nodeDir.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
   return [
     "(version 1)",

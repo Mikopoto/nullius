@@ -14,8 +14,11 @@ import {
   claimCanEnterManuscript,
   readinessReport,
   stageManuscriptPatch,
+  applyPatchIfValid,
   retryAfterSeconds,
-  delayForAttempt
+  delayForAttempt,
+  scheduledLaneIds,
+  sandboxProfile
 } from "@nullius/core";
 import type { ConformanceSuite } from "./index.js";
 
@@ -101,6 +104,50 @@ describe("conformance vectors", () => {
       } else {
         expect(delayForAttempt(testCase.input.attempt ?? 0, testCase.input.retryAfter, () => testCase.input.jitter ?? 0)).toBe(testCase.expect.value);
       }
+    });
+  }
+
+
+  const laneScheduler = loadSuite<
+    Parameters<typeof scheduledLaneIds>[0],
+    { laneIds: string[] }
+  >("lane-scheduler.json");
+
+  for (const testCase of laneScheduler.cases) {
+    it(`${laneScheduler.suite}: ${testCase.name}`, () => {
+      expect(scheduledLaneIds(testCase.input)).toEqual(testCase.expect.laneIds);
+    });
+  }
+
+  const sandbox = loadSuite<
+    { nodeDir: string },
+    { contains: string[]; notContains: string[] }
+  >("sandbox-profile.json");
+
+  for (const testCase of sandbox.cases) {
+    it(`${sandbox.suite}: ${testCase.name}`, () => {
+      const profile = sandboxProfile(testCase.input.nodeDir);
+      for (const expected of testCase.expect.contains) expect(profile).toContain(expected);
+      for (const unexpected of testCase.expect.notContains) expect(profile).not.toContain(unexpected);
+    });
+  }
+
+  const gatePipeline = loadSuite<
+    { operation: "stageAndApplyPatch"; project: Parameters<typeof readinessReport>[0]; body: string; artifactTexts?: string[] },
+    { patchStatus: string; applied: boolean; bodyContains?: string; warningIncludes?: string }
+  >("gate-pipeline.json");
+
+  for (const testCase of gatePipeline.cases) {
+    it(`${gatePipeline.suite}: ${testCase.name}`, () => {
+      const patch = stageManuscriptPatch(testCase.input.project, testCase.input.body, {
+        autoApprove: true,
+        artifactTexts: testCase.input.artifactTexts ?? []
+      });
+      const applied = applyPatchIfValid(testCase.input.project.manuscriptBody, patch);
+      expect(patch.status).toBe(testCase.expect.patchStatus);
+      expect(applied.applied).toBe(testCase.expect.applied);
+      if (testCase.expect.bodyContains) expect(applied.body).toContain(testCase.expect.bodyContains);
+      if (testCase.expect.warningIncludes) expect(patch.warnings.some((warning) => warning.message.includes(testCase.expect.warningIncludes!))).toBe(true);
     });
   }
 

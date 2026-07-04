@@ -16,6 +16,10 @@ interface StreamLine {
   content: string;
   reasoning: string;
   usage?: { promptTokens?: number; completionTokens?: number; reasoningTokens?: number };
+  startedAt: number;
+  updatedAt: number;
+  latencyMs: number;
+  costLabel: string;
 }
 
 interface TimelineEvent {
@@ -111,13 +115,17 @@ const useAppState = create<AppState>((set, get) => ({
   appendEvent: (event) => set((state) => ({ events: [...state.events, event] })),
   appendStreamDelta: (event) => set((state) => {
     const key = `${event.runId}:${event.role}:${event.purpose}`;
+    const now = Date.now();
     const existing = state.streamLines.find((line) => line.key === key);
-    const line: StreamLine = existing ?? { key, role: event.role, purpose: event.purpose, content: "", reasoning: "" };
+    const line: StreamLine = existing ?? { key, role: event.role, purpose: event.purpose, content: "", reasoning: "", startedAt: now, updatedAt: now, latencyMs: 0, costLabel: "$—" };
     const nextUsage = event.kind === "usage" ? event.usage : line.usage;
     const updated: StreamLine = {
       ...line,
       content: line.content + (event.kind === "content" ? event.text ?? "" : ""),
       reasoning: line.reasoning + (event.kind === "reasoning" ? event.text ?? "" : ""),
+      updatedAt: now,
+      latencyMs: now - line.startedAt,
+      costLabel: nextUsage ? "$—" : line.costLabel,
       ...(nextUsage ? { usage: nextUsage } : {})
     };
     return { streamLines: existing ? state.streamLines.map((item) => item.key === key ? updated : item) : [...state.streamLines, updated] };
@@ -607,7 +615,11 @@ function MissionConsole() {
             </div>
             {line.content ? <p>{line.content}</p> : null}
             {line.reasoning ? <details className="reasoning"><summary>Reasoning</summary><p>{line.reasoning}</p></details> : null}
-            {line.usage ? <div className="usage-badges"><span>prompt {line.usage.promptTokens ?? 0}</span><span>completion {line.usage.completionTokens ?? 0}</span><span>reasoning {line.usage.reasoningTokens ?? 0}</span></div> : null}
+            <div className="usage-badges">
+              {line.usage ? <><span>prompt {line.usage.promptTokens ?? 0}</span><span>completion {line.usage.completionTokens ?? 0}</span><span>reasoning {line.usage.reasoningTokens ?? 0}</span></> : <span>tokens pending</span>}
+              <span>latency {formatLatency(line.latencyMs)}</span>
+              <span>cost {line.costLabel}</span>
+            </div>
           </section>
         ))}
       </div>
@@ -652,6 +664,11 @@ function InterventionCard({ status }: { status: string }) {
       </div>
     </section>
   );
+}
+
+function formatLatency(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 function renderMarkdownLike(markdown: string): React.ReactNode[] {

@@ -1,0 +1,39 @@
+{
+  "suite": "gate-pipeline",
+  "cases": [
+    {
+      "name": "approved grounded patch applies cleanly",
+      "input": {
+        "operation": "stageAndApplyPatch",
+        "project": {
+          "manuscriptBody": "# Abstract\nOld.\n# Introduction\nOld.\n# Methods\nOld.\n# Results\nOld.\n# Discussion\nOld.\n# Limitations\nOld.\n# References\nNone.",
+          "evidence": [{ "id": "e1", "type": "execution", "title": "fit", "summary": "metric,value\nslope,2.0\n", "path": "artifacts/fit.csv", "validation": "valid", "review": "approved", "executionExitCode": 0 }],
+          "claims": [{ "id": "c1", "text": "The fit slope is 2.0.", "type": "result", "validation": "valid", "review": "approved", "supportRefs": [{ "targetType": "evidence", "targetId": "e1", "role": "primary", "validation": "valid" }] }],
+          "literature": [],
+          "nodes": [],
+          "patches": []
+        },
+        "body": "# Abstract\nOld.\n# Introduction\nOld.\n# Methods\nOld.\n# Results\nThe fit slope is 2.0.\n# Discussion\nOld.\n# Limitations\nOld.\n# References\nNone.",
+        "artifactTexts": ["metric,value\nslope,2.0\n"]
+      },
+      "expect": { "patchStatus": "approved", "applied": true, "bodyContains": "The fit slope is 2.0." }
+    },
+    {
+      "name": "ungrounded numeric patch stops before apply",
+      "input": {
+        "operation": "stageAndApplyPatch",
+        "project": {
+          "manuscriptBody": "# Abstract\nOld.\n# Introduction\nOld.\n# Methods\nOld.\n# Results\nOld.\n# Discussion\nOld.\n# Limitations\nOld.\n# References\nNone.",
+          "evidence": [{ "id": "e1", "type": "execution", "title": "fit", "summary": "metric,value\nslope,2.0\n", "path": "artifacts/fit.csv", "validation": "valid", "review": "approved", "executionExitCode": 0 }],
+          "claims": [{ "id": "c1", "text": "The fit slope is 2.0.", "type": "result", "validation": "valid", "review": "approved", "supportRefs": [{ "targetType": "evidence", "targetId": "e1", "role": "primary", "validation": "valid" }] }],
+          "literature": [],
+          "nodes": [],
+          "patches": []
+        },
+        "body": "# Abstract\nOld.\n# Introduction\nOld.\n# Methods\nOld.\n# Results\nThe fit slope is 9.4142.\n# Discussion\nOld.\n# Limitations\nOld.\n# References\nNone.",
+        "artifactTexts": ["metric,value\nslope,2.0\n"]
+      },
+      "expect": { "patchStatus": "needsRevision", "applied": false, "warningIncludes": "9.4142" }
+    }
+  ]
+}

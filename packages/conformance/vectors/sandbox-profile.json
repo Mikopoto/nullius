@@ -1,0 +1,21 @@
+{
+  "suite": "sandbox-profile",
+  "cases": [
+    {
+      "name": "deny default and network while allowing node dir writes",
+      "input": { "nodeDir": "/tmp/nullius node" },
+      "expect": {
+        "contains": ["(deny default)", "(deny network*)", "(allow file-write* (subpath \"/tmp/nullius node\"))"],
+        "notContains": ["(allow network*)"]
+      }
+    },
+    {
+      "name": "quotes are escaped in path",
+      "input": { "nodeDir": "/tmp/nullius \"quoted\"" },
+      "expect": {
+        "contains": ["/tmp/nullius \\\"quoted\\\""],
+        "notContains": ["/tmp/nullius \"quoted\""]
+      }
+    }
+  ]
+}

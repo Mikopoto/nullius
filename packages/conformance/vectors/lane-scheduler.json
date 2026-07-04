@@ -1,0 +1,43 @@
+{
+  "suite": "lane-scheduler",
+  "cases": [
+    {
+      "name": "empty approved lane is eligible",
+      "input": {
+        "approvedPlanIds": ["p1"],
+        "limit": 3,
+        "lanes": [
+          { "id": "lane-a", "planId": "p1", "nodes": [] }
+        ]
+      },
+      "expect": { "laneIds": ["lane-a"] }
+    },
+    {
+      "name": "blocked states and unapproved plans are skipped",
+      "input": {
+        "approvedPlanIds": ["p1"],
+        "limit": 5,
+        "lanes": [
+          { "id": "running", "planId": "p1", "nodes": [{ "status": "running" }] },
+          { "id": "critical", "planId": "p1", "nodes": [{ "status": "completed", "reviewSeverity": "critical" }] },
+          { "id": "unapproved", "planId": "p2", "nodes": [] },
+          { "id": "ready", "planId": "p1", "nodes": [{ "status": "completed", "reviewSeverity": "clear" }] }
+        ]
+      },
+      "expect": { "laneIds": ["ready"] }
+    },
+    {
+      "name": "limit preserves deterministic order",
+      "input": {
+        "approvedPlanIds": ["p1", "p2"],
+        "limit": 2,
+        "lanes": [
+          { "id": "lane-1", "planId": "p1", "nodes": [] },
+          { "id": "lane-2", "planId": "p2", "nodes": [{ "status": "settled" }] },
+          { "id": "lane-3", "planId": "p1", "nodes": [] }
+        ]
+      },
+      "expect": { "laneIds": ["lane-1", "lane-2"] }
+    }
+  ]
+}

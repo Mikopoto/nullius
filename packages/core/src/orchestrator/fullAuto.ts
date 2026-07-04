@@ -433,6 +433,32 @@ async function ensureLanesForApprovedPlans(root: string, snapshot: ProjectSnapsh
   }
 }
 
+export interface LaneScheduleConformanceInput {
+  approvedPlanIds: string[];
+  limit: number;
+  lanes: Array<{
+    id: string;
+    planId: string;
+    nodes: Array<{ status: NodeRecord["status"]; reviewSeverity?: NodeReview["severity"] }>;
+  }>;
+}
+
+export function scheduledLaneIds(input: LaneScheduleConformanceInput): string[] {
+  const approved = new Set(input.approvedPlanIds);
+  return input.lanes
+    .filter((lane) => approved.has(lane.planId) && laneLikeCanRun(lane.nodes))
+    .slice(0, Math.max(0, input.limit))
+    .map((lane) => lane.id);
+}
+
+function laneLikeCanRun(nodes: Array<{ status: NodeRecord["status"]; reviewSeverity?: NodeReview["severity"] }>): boolean {
+  const last = nodes.at(-1);
+  if (!last) return true;
+  if (last.status === "running" || last.status === "waitingForUser" || last.status === "error") return false;
+  if (last.reviewSeverity === "critical") return false;
+  return last.status === "completed" || last.status === "settled";
+}
+
 function selectEligibleLanes(snapshot: ProjectSnapshot, approvedPlans: Plan[], limit: number): Array<{ lane: LoadedLane; plan: Plan }> {
   const plansById = new Map(approvedPlans.map((plan) => [plan.id, plan]));
   return snapshot.lanes
