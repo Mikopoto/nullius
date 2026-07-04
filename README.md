@@ -184,6 +184,22 @@ TypeScript monorepo: `packages/core` (gates + orchestrator, UI-independent), `pa
 
 Architecture, gate algorithms, threat model, and the case study are documented in the paper: [`docs/paper/nullius.pdf`](docs/paper/nullius.pdf).
 
+## Status: what is solid, what is not yet
+
+Honest state of the project (v0.1.x). The **core engine and CLI are the mature part**: the gates, orchestrator, sandbox, and `verify --json` contract are covered by 90+ tests including adversarial cases, and the paper's case study was produced through them.
+
+The **desktop GUI is functional but incomplete**:
+
+- Cost badges in the console are placeholders (token counts show; USD cost is not yet wired).
+- Full prompt/response transcripts are recorded only partially and are not yet browsable in the GUI.
+- Role filter and search apply to the event timeline, not to the live stream cards.
+- No amendment-approval UI yet (protocol amendments are a schema without a producer).
+- Stopping a run aborts sandboxed executions, but not an in-flight model call.
+- macOS (Apple Silicon) is the only prebuilt, tested app; Windows/Linux run from source and keep API keys in memory/env only.
+- The app is not notarized.
+
+The full audited gap list, in priority order, lives in [issue #1](../../issues/1). If you need dependable behavior today, prefer the CLI; treat the GUI as a supervision surface that is still hardening.
+
 ## Safety notes
 
 - API keys: OS keychain / env vars / process memory only.
