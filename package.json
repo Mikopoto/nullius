@@ -11,7 +11,8 @@
     "build": "pnpm -r --if-present build",
     "lint": "pnpm --filter @nullius/core build && pnpm --filter @nullius/server build && pnpm -r --if-present lint",
     "typecheck": "pnpm --filter @nullius/core build && pnpm --filter @nullius/server build && pnpm -r --if-present typecheck",
-    "test": "pnpm -r --if-present test"
+    "test": "pnpm -r --if-present test",
+    "build:action": "pnpm --filter @nullius/core build && pnpm --filter @nullius/server build && pnpm --filter @nullius/cli bundle:action"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

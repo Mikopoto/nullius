@@ -1,0 +1,58 @@
+name: nullius-verify
+description: >-
+  Run Nullius deterministic research gates (numbers, citations, repro) against a
+  Nullius project and fail the job if the selected gate does not pass. Writes a
+  gate result table to the job summary.
+author: Studio Uchu
+branding:
+  icon: check-circle
+  color: green
+
+inputs:
+  project-path:
+    description: Path to the Nullius project folder (the one containing nullius.json).
+    required: false
+    default: "."
+  gate:
+    description: "Gate to enforce: numbers, citations, repro, or all."
+    required: false
+    default: all
+  depth:
+    description: "Readiness depth: quick, standard, or deep."
+    required: false
+    default: standard
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Run Nullius gates
+      shell: bash
+      env:
+        NULLIUS_ACTION_PATH: ${{ github.action_path }}
+        NULLIUS_PROJECT_PATH: ${{ inputs.project-path }}
+        NULLIUS_GATE: ${{ inputs.gate }}
+        NULLIUS_DEPTH: ${{ inputs.depth }}
+      run: |
+        set +e
+        node "$NULLIUS_ACTION_PATH/dist/nullius.cjs" verify "$NULLIUS_PROJECT_PATH" \
+          --json --gate "$NULLIUS_GATE" --depth "$NULLIUS_DEPTH" > nullius-verify.json
+        exit_code=$?
+        set -e
+
+        if node -e "JSON.parse(require('fs').readFileSync('nullius-verify.json','utf8'))" 2>/dev/null; then
+          node "$NULLIUS_ACTION_PATH/summary.mjs" nullius-verify.json >> "$GITHUB_STEP_SUMMARY"
+        else
+          {
+            echo "## Nullius verify"
+            echo ""
+            echo "The CLI did not produce a parseable JSON report (exit code $exit_code)."
+            echo "Check that \`project-path\` points at a folder containing \`nullius.json\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        cat nullius-verify.json 2>/dev/null || true
+        exit "$exit_code"

@@ -5,7 +5,16 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Background, Controls, MiniMap, ReactFlow, type Edge, type Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
+import "@fontsource/fraunces/400.css";
+import "@fontsource/fraunces/500.css";
+import "@fontsource/fraunces/600.css";
+import "@fontsource/fraunces/400-italic.css";
+import "@fontsource-variable/inter";
 import "./styles.css";
+
+const storedTheme = typeof localStorage !== "undefined" ? localStorage.getItem("nullius-theme") : null;
+document.documentElement.dataset.theme = storedTheme === "light" ? "light" : "dark";
 
 type Role = "planner" | "executor" | "reviewer" | "synthesizer" | "system" | "user";
 type Panel = "setup" | "tutorial" | "manuscript" | "readiness" | "graph" | "evidence" | "citations";
@@ -14,6 +23,9 @@ type RoleName = "planner" | "executor" | "reviewer";
 type ActivitySource = "gui" | "cli" | "server" | "core" | "externalAgent" | "gate" | "sandbox" | "reviewer";
 interface RoleConfig { provider: KeyProvider; model: string; reasoningEffort: "none" | "low" | "medium" | "high" }
 const isTauri = () => "__TAURI_INTERNALS__" in window;
+const normalizeRoot = (root: string) => root.trim().replace(/\/+$/, "");
+const sameRoot = (a: string | undefined, b: string | undefined) => Boolean(a) && Boolean(b) && normalizeRoot(a!) === normalizeRoot(b!);
+const seenEventKeys = new Set<string>();
 const defaultRoles = (): Record<RoleName, RoleConfig> => ({
   planner: { provider: "openrouter", model: "openrouter/auto", reasoningEffort: "none" },
   executor: { provider: "openrouter", model: "openrouter/auto", reasoningEffort: "none" },
@@ -30,7 +42,7 @@ interface StreamLine {
   startedAt: number;
   updatedAt: number;
   latencyMs: number;
-  costLabel: string;
+  done: boolean;
 }
 
 interface TimelineEvent {
@@ -140,6 +152,10 @@ interface AppState {
   consoleRoleFilter: "all" | Role;
   consoleSourceFilter: "all" | ActivitySource;
   intervention: { title: string; detail: string } | undefined;
+  wsState: "connected" | "reconnecting" | "disconnected";
+  externalRun: { source: string } | undefined;
+  pending: string | undefined;
+  questionDirty: boolean;
   snapshot?: ProjectSnapshot;
   readiness: Readiness | undefined;
   keyProvider: KeyProvider;
@@ -149,6 +165,9 @@ interface AppState {
   dataFiles: string[];
   roles: Record<RoleName, RoleConfig>;
   setPanel: (panel: Panel) => void;
+  setWsState: (value: "connected" | "reconnecting" | "disconnected") => void;
+  setExternalRun: (value: { source: string } | undefined) => void;
+  finishStreams: () => void;
   setField: <K extends "serverUrl" | "projectRoot" | "question">(key: K, value: string) => void;
   setUseMock: (value: boolean) => void;
   setKeyProvider: (value: KeyProvider) => void;
@@ -216,6 +235,10 @@ const useAppState = create<AppState>((set, get) => ({
   consoleRoleFilter: "all",
   consoleSourceFilter: "all",
   intervention: undefined,
+  wsState: "disconnected",
+  externalRun: undefined,
+  pending: undefined,
+  questionDirty: false,
   readiness: undefined,
   keyProvider: "openrouter",
   keyValue: "",
@@ -224,14 +247,18 @@ const useAppState = create<AppState>((set, get) => ({
   dataFiles: [],
   roles: defaultRoles(),
   setPanel: (panel) => set({ activePanel: panel }),
-  setField: (key, value) => set({ [key]: value }),
+  setWsState: (value) => set({ wsState: value }),
+  setExternalRun: (value) => set({ externalRun: value }),
+  finishStreams: () => set((state) => ({ streamLines: state.streamLines.map((line) => line.done ? line : { ...line, done: true }) })),
+  setField: (key, value) => set(key === "question" ? { question: value, questionDirty: true } : { [key]: value }),
   setUseMock: (value) => set({ useMock: value }),
   setKeyProvider: (value) => set({ keyProvider: value }),
   setKeyValue: (value) => set({ keyValue: value }),
   setTutorialLang: (value) => set({ tutorialLang: value }),
   saveKey: async () => {
     const { keyProvider, keyValue } = get();
-    if (!keyValue.trim()) return;
+    if (!keyValue.trim() || get().pending) return;
+    set({ pending: "saveKey" });
     try {
       const result = await get().command("keys.set", { provider: keyProvider, apiKey: keyValue.trim(), persist: true }) as { stored: string };
       set({
@@ -243,17 +270,22 @@ const useAppState = create<AppState>((set, get) => ({
       await get().refreshKeys();
     } catch (error) {
       set({ status: `Key save failed: ${String(error)}` });
+    } finally {
+      set({ pending: undefined });
     }
   },
   setRole: (role, patch) => set((state) => ({ roles: { ...state.roles, [role]: { ...state.roles[role], ...patch } } })),
   saveModels: async () => {
     const root = requireProjectRoot(get, set);
-    if (!root) return;
+    if (!root || get().pending) return;
+    set({ pending: "saveModels" });
     try {
       await get().command("project.configure", { root, roles: get().roles });
       set({ status: "Models saved to the project" });
     } catch (error) {
       set({ status: `Model save failed: ${String(error)}` });
+    } finally {
+      set({ pending: undefined });
     }
   },
   browseProjectFolder: async () => {
@@ -312,13 +344,16 @@ const useAppState = create<AppState>((set, get) => ({
   },
   adoptPlan: async (planId) => {
     const root = requireProjectRoot(get, set);
-    if (!root) return;
+    if (!root || get().pending) return;
+    set({ pending: "adoptPlan" });
     try {
       await get().command("plan.adopt", { root, planId });
       await get().refreshSnapshot();
       set({ status: "Plan adopted: protocol locked" });
     } catch (error) {
       set({ status: `Adopt failed: ${String(error)}` });
+    } finally {
+      set({ pending: undefined });
     }
   },
   setConsoleQuery: (value) => set({ consoleQuery: value }),
@@ -326,14 +361,20 @@ const useAppState = create<AppState>((set, get) => ({
   setConsoleSourceFilter: (value) => set({ consoleSourceFilter: value }),
   appendEvent: (event) => set((state) => {
     const eventKey = event.key ?? `${event.id}:${event.source ?? "run"}:${event.phase}:${event.title}`;
-    if (state.events.some((item) => (item.key ?? `${item.id}:${item.source ?? "run"}:${item.phase}:${item.title}`) === eventKey)) return {};
+    if (seenEventKeys.has(eventKey)) return {};
+    seenEventKeys.add(eventKey);
+    if (seenEventKeys.size > 5000) {
+      seenEventKeys.clear();
+      for (const item of state.events) seenEventKeys.add(item.key ?? "");
+      seenEventKeys.add(eventKey);
+    }
     return { events: [...state.events, { ...event, key: eventKey }].slice(-1000) };
   }),
   appendStreamDelta: (event) => set((state) => {
     const key = `${event.runId}:${event.role}:${event.purpose}`;
     const now = Date.now();
     const existing = state.streamLines.find((line) => line.key === key);
-    const line: StreamLine = existing ?? { key, role: event.role, purpose: event.purpose, content: "", reasoning: "", startedAt: now, updatedAt: now, latencyMs: 0, costLabel: "$—" };
+    const line: StreamLine = existing ?? { key, role: event.role, purpose: event.purpose, content: "", reasoning: "", startedAt: now, updatedAt: now, latencyMs: 0, done: false };
     const nextUsage = event.kind === "usage" ? event.usage : line.usage;
     const updated: StreamLine = {
       ...line,
@@ -341,10 +382,10 @@ const useAppState = create<AppState>((set, get) => ({
       reasoning: line.reasoning + (event.kind === "reasoning" ? event.text ?? "" : ""),
       updatedAt: now,
       latencyMs: now - line.startedAt,
-      costLabel: nextUsage ? "$—" : line.costLabel,
+      done: line.done || event.kind === "usage",
       ...(nextUsage ? { usage: nextUsage } : {})
     };
-    return { streamLines: existing ? state.streamLines.map((item) => item.key === key ? updated : item) : [...state.streamLines, updated] };
+    return { streamLines: (existing ? state.streamLines.map((item) => item.key === key ? updated : item) : [...state.streamLines, updated]).slice(-40) };
   }),
   command: async (command, payload) => {
     const response = await fetch(`${get().serverUrl}/command`, {
@@ -360,7 +401,7 @@ const useAppState = create<AppState>((set, get) => ({
     const root = requireProjectRoot(get, set);
     if (!root) return;
     const snapshot = await get().command("project.open", { root }) as ProjectSnapshot;
-    set({ snapshot, question: snapshot.manifest.question });
+    set(get().questionDirty ? { snapshot } : { snapshot, question: snapshot.manifest.question });
   },
   watchActivity: async () => {
     const root = requireProjectRoot(get, set);
@@ -409,7 +450,7 @@ const useAppState = create<AppState>((set, get) => ({
     }
   },
   resumeRun: async () => {
-    set({ busy: true, status: "Resuming...", intervention: undefined });
+    set({ busy: true, status: "Resuming...", intervention: undefined, streamLines: [] });
     try {
       const root = requireProjectRoot(get, set);
       if (!root) return;
@@ -421,10 +462,12 @@ const useAppState = create<AppState>((set, get) => ({
       set({ status: `Resume failed: ${String(error)}` });
     } finally {
       set({ busy: false });
+      get().finishStreams();
     }
   },
   steer: async (instruction) => {
-    if (!instruction.trim()) return;
+    if (!instruction.trim() || get().pending) return;
+    set({ pending: "steer" });
     try {
       const root = requireProjectRoot(get, set);
       if (!root) return;
@@ -432,9 +475,13 @@ const useAppState = create<AppState>((set, get) => ({
       set({ status: "Steering instruction saved" });
     } catch (error) {
       set({ status: `Steering failed: ${String(error)}` });
+    } finally {
+      set({ pending: undefined });
     }
   },
   approvePatch: async (patchId) => {
+    if (get().pending) return;
+    set({ pending: "approvePatch" });
     try {
       const root = requireProjectRoot(get, set);
       if (!root) return;
@@ -444,9 +491,13 @@ const useAppState = create<AppState>((set, get) => ({
       set({ status: "Patch approved" });
     } catch (error) {
       set({ status: `Approve failed: ${String(error)}` });
+    } finally {
+      set({ pending: undefined });
     }
   },
   rejectPatch: async (patchId) => {
+    if (get().pending) return;
+    set({ pending: "rejectPatch" });
     try {
       const root = requireProjectRoot(get, set);
       if (!root) return;
@@ -456,6 +507,8 @@ const useAppState = create<AppState>((set, get) => ({
       set({ status: "Patch rejected" });
     } catch (error) {
       set({ status: `Reject failed: ${String(error)}` });
+    } finally {
+      set({ pending: undefined });
     }
   },
   connect: async () => {
@@ -464,7 +517,7 @@ const useAppState = create<AppState>((set, get) => ({
     set({ busy: true, status: "Connecting..." });
     try {
       const snapshot = await get().command("project.open", { root }) as ProjectSnapshot;
-      set({ snapshot, question: snapshot.manifest.question, status: "Connected", activePanel: "manuscript" });
+      set({ snapshot, question: snapshot.manifest.question, questionDirty: false, status: "Connected", activePanel: "manuscript" });
       await get().watchActivity();
       await get().refreshKeys();
       await get().refreshData();
@@ -503,7 +556,7 @@ const useAppState = create<AppState>((set, get) => ({
   run: async () => {
     const root = requireProjectRoot(get, set);
     if (!root) return;
-    set({ busy: true, status: "Running Full Auto..." });
+    set({ busy: true, status: "Running Full Auto...", streamLines: [] });
     try {
       const result = await get().command("run.start", { root, mock: get().useMock, backend: "auto" }) as FullAutoCommandResult;
       await get().refreshSnapshot();
@@ -522,21 +575,26 @@ const useAppState = create<AppState>((set, get) => ({
       set({ status: `Run failed: ${String(error)}` });
     } finally {
       set({ busy: false });
+      get().finishStreams();
     }
   },
   verify: async () => {
     const root = requireProjectRoot(get, set);
-    if (!root) return;
+    if (!root || get().pending) return;
+    set({ pending: "verify" });
     try {
       const result = await get().command("gates.verify", { root, depth: "standard" }) as { readiness: Readiness };
       set({ readiness: result.readiness, status: result.readiness.ready ? "Ready" : "Not ready" });
     } catch (error) {
       set({ status: `Verify failed: ${String(error)}` });
+    } finally {
+      set({ pending: undefined });
     }
   },
   exportMarkdown: async () => {
     const root = requireProjectRoot(get, set);
-    if (!root) return;
+    if (!root || get().pending) return;
+    set({ pending: "export" });
     try {
       const result = await get().command("export.markdown", { root }) as { body: string };
       set((state) => state.snapshot
@@ -544,6 +602,8 @@ const useAppState = create<AppState>((set, get) => ({
         : { status: "Markdown loaded" });
     } catch (error) {
       set({ status: `Export failed: ${String(error)}` });
+    } finally {
+      set({ pending: undefined });
     }
   }
 }));
@@ -576,6 +636,9 @@ function App() {
   useEffect(() => {
     const url = serverUrl.replace(/^http/, "ws");
     let socket: WebSocket | undefined;
+    let closed = false;
+    let retryTimer: number | undefined;
+    let attempt = 0;
     const pendingStream: Array<{ runId: string; role: Role; purpose: string; kind: string; text?: string; usage?: StreamLine["usage"] }> = [];
     const flush = () => {
       if (pendingStream.length === 0) return;
@@ -584,8 +647,28 @@ function App() {
       for (const item of batch) appendStreamDelta(item);
     };
     const interval = window.setInterval(flush, 67);
-    try {
-      socket = new WebSocket(url);
+    const connect = () => {
+      if (closed) return;
+      try {
+        socket = new WebSocket(url);
+      } catch {
+        useAppState.getState().setWsState("disconnected");
+        return;
+      }
+      socket.onopen = () => {
+        attempt = 0;
+        useAppState.getState().setWsState("connected");
+      };
+      socket.onclose = () => {
+        if (closed) return;
+        useAppState.getState().setWsState("reconnecting");
+        attempt += 1;
+        const delay = Math.min(15000, 500 * 2 ** Math.min(attempt, 5));
+        retryTimer = window.setTimeout(connect, delay);
+      };
+      socket.onerror = () => {
+        socket?.close();
+      };
       socket.onmessage = (message) => {
         const payload = JSON.parse(message.data as string) as {
           type?: string;
@@ -597,24 +680,40 @@ function App() {
           text?: string;
           usage?: StreamLine["usage"];
           root?: string;
+          source?: string;
           event?: ActivityJournalEvent | { seq: number; role: Role; kind: string; title: string; detail?: string };
         };
-        if (payload.type === "state.changed") {
+        const state = useAppState.getState();
+        const matchesProject = sameRoot(payload.root, state.projectRoot);
+        if (payload.type === "state.changed" && matchesProject) {
           useAppState.setState({ readiness: payload.readiness });
-          if (payload.root && payload.root === useAppState.getState().projectRoot.trim()) {
-            void useAppState.getState().refreshSnapshot();
-          }
+          state.refreshSnapshot().catch(() => undefined);
+        }
+        if (payload.type === "run.started" && matchesProject && !state.busy) {
+          state.setExternalRun({ source: payload.source ?? "server" });
+        }
+        if (payload.type === "run.finished" && matchesProject) {
+          state.setExternalRun(undefined);
+          state.finishStreams();
         }
         if (payload.type === "activity.event" && payload.event && isActivityJournalEvent(payload.event)) {
-          appendEvent(activityToTimelineEvent(payload.event));
+          const activity = payload.event;
+          if (sameRoot(activity.projectRoot, state.projectRoot)) {
+            if (activity.source !== "gui" && activity.phase === "run.started" && !state.busy) {
+              state.setExternalRun({ source: activity.source });
+            }
+            if (activity.source !== "gui" && (activity.phase === "run.completed" || activity.phase === "run.failed")) {
+              state.setExternalRun(undefined);
+              state.finishStreams();
+            }
+          }
+          appendEvent(activityToTimelineEvent(activity));
         }
         if (payload.type === "stream.delta" && payload.runId && payload.role && payload.purpose && payload.kind) {
           pendingStream.push({ runId: payload.runId, role: payload.role, purpose: payload.purpose, kind: payload.kind, ...(payload.text ? { text: payload.text } : {}), ...(payload.usage ? { usage: payload.usage } : {}) });
         }
         if (payload.type === "intervention.required" && payload.event && isFullAutoTimelineEvent(payload.event)) {
           useAppState.setState({ intervention: { title: payload.event.title, detail: payload.event.detail ?? "" }, status: payload.event.title });
-        }
-        if (payload.type === "intervention.required" && payload.event && isFullAutoTimelineEvent(payload.event)) {
           appendEvent({
             key: `intervention:${payload.event.seq}:${payload.event.title}`,
             id: payload.event.seq,
@@ -627,10 +726,11 @@ function App() {
           });
         }
       };
-    } catch {
-      // HTTP-only usage is acceptable; the console will stay static until a run emits events.
-    }
+    };
+    connect();
     return () => {
+      closed = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
       window.clearInterval(interval);
       flush();
       socket?.close();
@@ -676,7 +776,23 @@ function Sidebar(props: { activePanel: Panel; setPanel: (panel: Panel) => void }
         <span>Evidence {snapshot?.evidence.length ?? 0}</span>
         <span>Patches {snapshot?.patches.length ?? 0}</span>
       </div>
+      <ThemeToggle />
     </aside>
+  );
+}
+
+function ThemeToggle() {
+  const [theme, setTheme] = useState<string>(document.documentElement.dataset.theme ?? "dark");
+  const toggle = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem("nullius-theme", next);
+    setTheme(next);
+  };
+  return (
+    <button className="theme-toggle" onClick={toggle}>
+      {theme === "dark" ? "Light theme" : "Dark theme"}
+    </button>
   );
 }
 
@@ -685,17 +801,32 @@ function Header() {
   const run = useAppState((state) => state.run);
   const verify = useAppState((state) => state.verify);
   const exportMarkdown = useAppState((state) => state.exportMarkdown);
+  const stopRun = useAppState((state) => state.stopRun);
   const busy = useAppState((state) => state.busy);
+  const pending = useAppState((state) => state.pending);
+  const externalRun = useAppState((state) => state.externalRun);
+  const wsState = useAppState((state) => state.wsState);
+  const blocked = busy || Boolean(externalRun);
   return (
     <header className="header">
-      <div>
-        <p className="eyebrow">Evidence-gated research</p>
-        <h1 title={question}>{question}</h1>
-      </div>
-      <div className="header-actions">
-        <button className="primary" disabled={busy} onClick={() => void run()}>{busy ? "Running…" : "Run Full Auto"}</button>
-        <button disabled={busy} onClick={() => void verify()}>Verify gates</button>
-        <button disabled={busy} onClick={() => void exportMarkdown()}>Export report</button>
+      {externalRun ? (
+        <div className="external-run-banner">
+          <span className="pulse-dot" aria-hidden />
+          External run in progress (source: {externalRun.source}). The GUI mirrors it live; starting another run is disabled.
+          <button onClick={() => void stopRun()}>Request stop</button>
+        </div>
+      ) : null}
+      <div className="header-row">
+        <div>
+          <p className="eyebrow">Evidence-gated research</p>
+          <h1 title={question}>{question}</h1>
+        </div>
+        <div className="header-actions">
+          <span className={`ws-dot ${wsState}`} title={`Server link: ${wsState}`} aria-label={`Server link: ${wsState}`} />
+          <button className="primary" disabled={blocked} onClick={() => void run()}>{busy ? "Running…" : "Run Full Auto"}</button>
+          <button disabled={blocked || Boolean(pending)} onClick={() => void verify()}>Verify gates</button>
+          <button disabled={blocked || Boolean(pending)} onClick={() => void exportMarkdown()}>Export report</button>
+        </div>
       </div>
     </header>
   );
@@ -714,7 +845,17 @@ function Panel({ panel }: { panel: Panel }) {
 }
 
 function SetupPanel() {
-  const state = useAppState();
+  const state = useAppState(useShallow((s) => ({
+    keyProvider: s.keyProvider, keyValue: s.keyValue, keyStatus: s.keyStatus,
+    projectRoot: s.projectRoot, question: s.question, useMock: s.useMock,
+    dataFiles: s.dataFiles, roles: s.roles, serverUrl: s.serverUrl,
+    snapshot: s.snapshot, busy: s.busy, pending: s.pending,
+    setKeyProvider: s.setKeyProvider, setKeyValue: s.setKeyValue, saveKey: s.saveKey,
+    refreshKeys: s.refreshKeys, setField: s.setField, setUseMock: s.setUseMock,
+    browseProjectFolder: s.browseProjectFolder, createProject: s.createProject, connect: s.connect,
+    addDataFiles: s.addDataFiles, setRole: s.setRole, saveModels: s.saveModels,
+    generatePlan: s.generatePlan, adoptPlan: s.adoptPlan
+  })));
   return (
     <div className="panel two-column">
       <section className="card">
@@ -756,9 +897,13 @@ function SetupPanel() {
         </div>
         <label>Research question</label>
         <textarea placeholder="What research question should Nullius investigate?" value={state.question} onChange={(event) => state.setField("question", event.currentTarget.value)} />
+        <label className="check-row">
+          <input type="checkbox" checked={state.useMock} onChange={(event) => state.setUseMock(event.currentTarget.checked)} />
+          Use deterministic mock agents (free demo, no API key)
+        </label>
         <div className="button-stack">
-          <button className="primary" onClick={() => void state.createProject()}>Create project</button>
-          <button onClick={() => void state.connect()}>Open existing</button>
+          <button className="primary" disabled={state.busy} onClick={() => void state.createProject()}>Create project</button>
+          <button disabled={state.busy} onClick={() => void state.connect()}>Open existing</button>
         </div>
         <label>Input data files</label>
         <p className="muted">Files added here land in the project's data/ folder. Every Full Auto run copies them into the analysis working directory, tells the executor to read them from ./data/, and bases the research on them. No files = the plan generates its own data.</p>
@@ -782,7 +927,7 @@ function SetupPanel() {
           </div>
         ))}
         <div className="button-stack">
-          <button onClick={() => void state.saveModels()}>Save models</button>
+          <button disabled={Boolean(state.pending)} onClick={() => void state.saveModels()}>Save models</button>
         </div>
         <label>Server URL</label>
         <input value={state.serverUrl} onChange={(event) => state.setField("serverUrl", event.currentTarget.value)} />
@@ -798,7 +943,7 @@ function SetupPanel() {
           <article className="plan-detail" key={plan.id}>
             <div className="plan-detail-head">
               <strong>{plan.title}</strong>
-              {plan.approved ? <span className="key-badge present">adopted</span> : <button className="primary" onClick={() => void state.adoptPlan(plan.id)}>Adopt this plan</button>}
+              {plan.approved ? <span className="key-badge present">adopted</span> : <button className="primary" disabled={Boolean(state.pending)} onClick={() => void state.adoptPlan(plan.id)}>Adopt this plan</button>}
             </div>
             <PlanField label="Purpose" text={plan.purpose} />
             <PlanField label="Method" text={plan.method} />
@@ -906,8 +1051,6 @@ function TutorialPanel() {
 
 function ManuscriptPanel() {
   const snapshot = useAppState((state) => state.snapshot);
-  const approvePatch = useAppState((state) => state.approvePatch);
-  const rejectPatch = useAppState((state) => state.rejectPatch);
   const body = snapshot?.manuscriptBody.trim() || "No manuscript yet. Create a project and run Full Auto.";
   return (
     <div className="panel manuscript-grid">
@@ -916,26 +1059,62 @@ function ManuscriptPanel() {
       </article>
       <aside className="patch-card">
         <h2>Staged Patches</h2>
-        {(snapshot?.patches ?? []).length === 0 ? <p className="muted">No staged patches.</p> : snapshot?.patches.map((patch) => {
-          const canApprove = patch.status === "draft" || patch.status === "needsRevision" || patch.status === "approved";
-          const hasBlockingWarnings = patch.warnings.some((warning) => warning.blocking);
-          return (
-            <div className="patch-entry" key={patch.id}>
-              <div className="patch-head">
-                <strong>{patch.status}</strong>
-                <em>{patch.operation} · {patch.targetSection}</em>
-              </div>
-              <span>{patch.id}</span>
-              <pre className="patch-preview">{patch.newBody.slice(0, 900)}</pre>
-              {patch.warnings.map((warning) => <div className={warning.blocking ? "gate-bad" : "gate-ok"} key={warning.message}>{warning.message}</div>)}
-              <div className="patch-actions">
-                <button disabled={!canApprove || hasBlockingWarnings || Boolean(patch.appliedAt)} onClick={() => void approvePatch(patch.id)}>Approve</button>
-                <button disabled={patch.status === "rejected" || Boolean(patch.appliedAt)} onClick={() => void rejectPatch(patch.id)}>Reject</button>
-              </div>
-            </div>
-          );
-        })}
+        {(snapshot?.patches ?? []).length === 0 ? <p className="muted">No staged patches.</p> : snapshot?.patches.map((patch) => (
+          <PatchEntry key={patch.id} patch={patch} />
+        ))}
       </aside>
+    </div>
+  );
+}
+
+function PatchEntry({ patch }: { patch: NonNullable<ProjectSnapshot["patches"]>[number] }) {
+  const approvePatch = useAppState((state) => state.approvePatch);
+  const rejectPatch = useAppState((state) => state.rejectPatch);
+  const command = useAppState((state) => state.command);
+  const projectRoot = useAppState((state) => state.projectRoot);
+  const pending = useAppState((state) => state.pending);
+  const [preview, setPreview] = useState<{ previewBody: string; wouldApply: boolean; reason?: string } | undefined>();
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const canApprove = patch.status === "draft" || patch.status === "needsRevision" || patch.status === "approved";
+  const hasBlockingWarnings = patch.warnings.some((warning) => warning.blocking);
+  const truncated = patch.newBody.length > 900;
+  const loadPreview = async () => {
+    if (loadingPreview) return;
+    setLoadingPreview(true);
+    try {
+      const result = await command("patch.preview", { root: projectRoot.trim(), patchId: patch.id }) as { previewBody: string; wouldApply: boolean; reason?: string };
+      setPreview(result);
+    } catch {
+      setPreview({ previewBody: patch.newBody, wouldApply: false, reason: "preview unavailable; showing raw patch body" });
+    } finally {
+      setLoadingPreview(false);
+    }
+  };
+  return (
+    <div className="patch-entry">
+      <div className="patch-head">
+        <strong>{patch.status}</strong>
+        <em>{patch.operation} · {patch.targetSection}</em>
+      </div>
+      <span>{patch.id}</span>
+      {preview ? (
+        <>
+          <p className="muted">Resulting manuscript{preview.wouldApply ? "" : ` (dry-run note: ${preview.reason ?? "would not apply"})`}:</p>
+          <pre className="patch-preview expanded">{preview.previewBody}</pre>
+        </>
+      ) : (
+        <pre className="patch-preview">{truncated ? patch.newBody.slice(0, 900) : patch.newBody}</pre>
+      )}
+      {!preview ? (
+        <button className="ghost" disabled={loadingPreview} onClick={() => void loadPreview()}>
+          {loadingPreview ? "Loading full result…" : truncated ? "Review full resulting manuscript (required before approve)" : "Review full resulting manuscript"}
+        </button>
+      ) : null}
+      {patch.warnings.map((warning) => <div className={warning.blocking ? "gate-bad" : "gate-ok"} key={warning.message}>{warning.message}</div>)}
+      <div className="patch-actions">
+        <button disabled={!canApprove || hasBlockingWarnings || Boolean(patch.appliedAt) || Boolean(pending) || (truncated && !preview)} title={truncated && !preview ? "Review the full resulting manuscript first" : undefined} onClick={() => void approvePatch(patch.id)}>Approve</button>
+        <button disabled={patch.status === "rejected" || Boolean(patch.appliedAt) || Boolean(pending)} onClick={() => void rejectPatch(patch.id)}>Reject</button>
+      </div>
     </div>
   );
 }
@@ -1066,6 +1245,7 @@ function MissionConsole() {
   const setSourceFilter = useAppState((state) => state.setConsoleSourceFilter);
   const copyAgentHandoff = useAppState((state) => state.copyAgentHandoff);
   const timelineEnd = useRef<HTMLSpanElement>(null);
+  const timelineBox = useRef<HTMLDivElement>(null);
   const latestEvent = events.at(-1);
   const latestBlocking = readiness ? blockingReason(readiness) : undefined;
   const filteredEvents = useMemo(() => {
@@ -1079,7 +1259,10 @@ function MissionConsole() {
   }, [events, query, roleFilter, sourceFilter]);
 
   useEffect(() => {
-    timelineEnd.current?.scrollIntoView({ block: "end" });
+    const box = timelineBox.current;
+    if (!box) return;
+    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+    if (nearBottom) timelineEnd.current?.scrollIntoView({ block: "end" });
   }, [filteredEvents.length]);
 
   return (
@@ -1122,23 +1305,22 @@ function MissionConsole() {
       </div>
       <div className="stream-stack">
         {streamLines.map((line) => (
-          <section className={`stream-card ${line.role}`} key={line.key}>
+          <section className={`stream-card ${line.role} ${line.done ? "is-done" : "is-live"}`} key={line.key}>
             <div className="event-top">
               <strong>{line.role}</strong>
               <em>{line.purpose}</em>
-              <span className="live-caret">▍</span>
+              {line.done ? <span className="done-chip">done</span> : <span className="live-caret">▍</span>}
             </div>
             {line.content ? <p>{line.content}</p> : null}
             {line.reasoning ? <details className="reasoning"><summary>Reasoning</summary><p>{line.reasoning}</p></details> : null}
             <div className="usage-badges">
               {line.usage ? <><span>prompt {line.usage.promptTokens ?? 0}</span><span>completion {line.usage.completionTokens ?? 0}</span><span>reasoning {line.usage.reasoningTokens ?? 0}</span></> : <span>tokens pending</span>}
               <span>latency {formatLatency(line.latencyMs)}</span>
-              <span>cost {line.costLabel}</span>
             </div>
           </section>
         ))}
       </div>
-      <div className="timeline">
+      <div className="timeline" ref={timelineBox}>
         {filteredEvents.length === 0 ? <p className="muted-console">Quiet for now. GUI runs and external `nullius` CLI commands appear here as soon as runtime/events.jsonl changes.</p> : filteredEvents.map((event) => (
           <div className={`event ${event.role} ${event.severity ?? "ok"}`} key={event.key ?? `${event.id}-${event.phase}-${event.title}`}>
             <div className="event-top">

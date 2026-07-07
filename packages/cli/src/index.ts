@@ -27,6 +27,8 @@ import {
   saveNode,
   savePlan,
   snapshotToGateProject,
+  buildVerifyResult,
+  verifyGateStatus,
   verifyLiteratureItem,
   type ActivityJournalInput,
   type ProjectManifest
@@ -112,8 +114,11 @@ program
       const depth = options.depth ?? snapshot.manifest.settings.depth;
       const report = readinessReport(snapshotToGateProject(snapshot), depth, projectGateIO(folder));
       const gate = options.gate ?? "all";
-      const gateStatus = gateResult(gate, report);
-      const result = { ok: gateStatus.ok, gate, readiness: report, failures: gateStatus.failures };
+      const gateStatus = verifyGateStatus(gate, report);
+      // Frozen contract (docs/verify-contract.md): buildVerifyResult validates the
+      // payload against VerifyResultSchema, so a drifting shape throws here in CI
+      // instead of silently changing the JSON consumers pin on.
+      const result = buildVerifyResult(gate, report);
       await recordCliActivity(folder, {
         source: "gate",
         role: "system",
@@ -752,18 +757,4 @@ function makeCitationKey(item: Record<string, unknown>): string {
   const firstAuthor = Array.isArray(item.author) && typeof item.author[0] === "object" && item.author[0] && "family" in item.author[0] ? String(item.author[0].family) : "source";
   const year = readCrossrefYear(item) ?? "nd";
   return `${firstAuthor.toLowerCase().replace(/[^a-z0-9]+/g, "")}${year}`;
-}
-
-
-function gateResult(gate: "numbers" | "citations" | "repro" | "all", report: ReturnType<typeof readinessReport>): { ok: boolean; failures: string[] } {
-  switch (gate) {
-    case "numbers":
-      return { ok: report.ungroundedResultNumbers.length === 0, failures: report.ungroundedResultNumbers };
-    case "citations":
-      return { ok: report.unverifiedCitationRefCount === 0, failures: report.unverifiedCitationRefCount === 0 ? [] : [`${report.unverifiedCitationRefCount} unverified citation reference(s)`] };
-    case "repro":
-      return { ok: report.irreproducibleNodeCount === 0, failures: report.irreproducibleNodeCount === 0 ? [] : [`${report.irreproducibleNodeCount} irreproducible node(s)`] };
-    case "all":
-      return { ok: report.ready, failures: report.ready ? [] : ["readiness failed"] };
-  }
 }

@@ -2,6 +2,7 @@ export * from "./model/schemas.js";
 export * from "./gates/numericGrounding.js";
 export * from "./gates/citations.js";
 export * from "./gates/evidence.js";
+export * from "./gates/verifyContract.js";
 export * from "./providers/streamParser.js";
 export * from "./providers/transportPolicy.js";
 export * from "./providers/responseParser.js";

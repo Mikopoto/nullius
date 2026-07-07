@@ -12,11 +12,15 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
-    "clean": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\""
+    "clean": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\"",
+    "bundle:action": "node scripts/bundle-action.mjs"
   },
   "dependencies": {
     "@nullius/core": "workspace:*",
     "@nullius/server": "workspace:*",
     "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
   }
 }

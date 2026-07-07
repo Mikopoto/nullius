@@ -6,6 +6,7 @@ import { basename, join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { z } from "zod";
 import {
+  applyPatchIfValid,
   approvePatch,
   activityFromFullAutoEvent,
   activityFromStreamEvent,
@@ -60,6 +61,7 @@ export const ServerCommandSchema = z.object({
     "keys.status",
     "data.import",
     "data.list",
+    "patch.preview",
     "project.configure",
     "activity.watch",
     "activity.list"
@@ -273,6 +275,7 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
         const snapshot = await loadProject(payload.root);
         const controller = new AbortController();
         activeRuns.set(payload.root, controller);
+        broadcast({ schemaVersion: 1, type: "run.started", root: payload.root, source: "gui" });
         await recordActivity(payload.root, {
           source: "gui",
           actor: "gui",
@@ -300,6 +303,7 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
           }
         );
         activeRuns.delete(payload.root);
+        broadcast({ schemaVersion: 1, type: "run.finished", root: payload.root });
         await recordActivity(payload.root, {
           source: "gui",
           actor: "gui",
@@ -319,6 +323,7 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
         const snapshot = await loadProject(payload.root);
         const controller = new AbortController();
         activeRuns.set(payload.root, controller);
+        broadcast({ schemaVersion: 1, type: "run.started", root: payload.root, source: "gui" });
         await recordActivity(payload.root, {
           source: "gui",
           actor: "gui",
@@ -346,6 +351,7 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
           }
         );
         activeRuns.delete(payload.root);
+        broadcast({ schemaVersion: 1, type: "run.finished", root: payload.root });
         await recordActivity(payload.root, {
           source: "gui",
           actor: "gui",
@@ -366,6 +372,7 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
         if (!controller) return { ok: true, stopped: false, reason: "No active run for this project." };
         controller.abort();
         activeRuns.delete(payload.root);
+        broadcast({ schemaVersion: 1, type: "run.finished", root: payload.root });
         await recordActivity(payload.root, {
           source: "gui",
           actor: "gui",
@@ -450,6 +457,23 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
         });
         await broadcastStateChanged(parsed.command, payload.root);
         return { ok: true, plan: adopted };
+      }
+      case "patch.preview": {
+        const payload = PatchPayload.parse(parsed.payload);
+        const snapshot = await loadProject(payload.root);
+        const patch = snapshot.patches.find((candidate) => candidate.id === payload.patchId);
+        if (!patch) return { ok: false, reason: `Patch not found: ${payload.patchId}` };
+        // Dry-run through the same deterministic apply logic; an unapproved draft is
+        // simulated as approved so the reviewer can see the exact resulting manuscript.
+        const simulated = patch.status === "approved" ? patch : { ...patch, status: "approved" as const };
+        const result = applyPatchIfValid(snapshot.manuscriptBody, simulated);
+        return {
+          ok: true,
+          wouldApply: result.applied,
+          reason: result.reason,
+          currentBody: snapshot.manuscriptBody,
+          previewBody: result.applied ? result.body : patch.newBody
+        };
       }
       case "patch.approve": {
         const payload = PatchPayload.parse(parsed.payload);

@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="docs/paper/nullius.pdf"><img alt="Paper" src="https://img.shields.io/badge/paper-PDF-284670"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-90%20passing-3C7850">
+  <a href="https://github.com/Mikopoto/nullius/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Mikopoto/nullius/actions/workflows/ci.yml/badge.svg?branch=main"></a>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-111111">
   <img alt="Stack" src="https://img.shields.io/badge/core-TypeScript-284670">
   <img alt="Desktop" src="https://img.shields.io/badge/desktop-Tauri%20%2B%20React-3C7850">
@@ -153,13 +153,31 @@ nullius models myproject --provider openrouter --model openrouter/auto
 
 The settings are written to `<project>/nullius.json`; API keys are not written to project files.
 
-`nullius verify --json [--gate numbers|citations|repro|all]` is a stable contract for **research CI**: wire it into your pipeline so no ungrounded number can merge, the same way tests gate code.
+`nullius verify --json [--gate numbers|citations|repro|all]` is a stable contract for **research CI**: wire it into your pipeline so no ungrounded number can merge, the same way tests gate code. Every field, the `schemaVersion` policy, and a full example are frozen in [`docs/verify-contract.md`](docs/verify-contract.md).
 
 ## Intended usage patterns
 
 **1. Supervised research (GUI).** You bring a question and optionally a dataset; the app plans, executes, and drafts while you watch the live console, adopt the plan, steer when it pauses, and approve patches. Best for exploratory work where your judgment matters at every step.
 
-**2. Research CI (CLI).** A repository of analyses where `nullius verify --json` runs in the pipeline: any commit whose manuscript contains an ungrounded number, an unverified citation, or an irreproducible node fails the build. Reports become artifacts that a script can certify, the same way tests certify code.
+**2. Research CI (CLI).** A repository of analyses where `nullius verify --json` runs in the pipeline: any commit whose manuscript contains an ungrounded number, an unverified citation, or an irreproducible node fails the build. Reports become artifacts that a script can certify, the same way tests certify code. The JSON shape is a frozen contract: [`docs/verify-contract.md`](docs/verify-contract.md).
+
+The repository ships a ready-made GitHub Action ([`action/`](action/README.md)) that runs the gates and writes a result table to the job summary (the `@v0` tag will resolve once the repository is tagged):
+
+```yaml
+# .github/workflows/research-ci.yml
+name: Research CI
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Mikopoto/nullius/action@v0
+        with:
+          project-path: myproject   # folder containing nullius.json
+          gate: all                 # numbers | citations | repro | all
+          depth: standard           # quick | standard | deep
+```
 
 **3. An AI coding agent drives the CLI.** This is a first-class use case: tell Codex, Claude Code, or any terminal agent to run research *through* Nullius instead of writing conclusions itself. The agent runs the loop and reacts to exit codes and gate reports, which are exactly the external verification signals LLM self-correction needs:
 
