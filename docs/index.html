@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nullius — take nobody's word for it</title>
+<meta name="description" content="Evidence-gated AI research on your own machine. No number and no citation enters the report unless it traces to real evidence.">
+<style>
+  :root { --ink: #111; --paper: #fbfbfa; --line: #e2e2df; --dim: #666; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #101010; color: #ececec; font: 16px/1.6 Inter, ui-sans-serif, system-ui, sans-serif; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 72px 24px 96px; }
+  h1 { font-family: Georgia, 'Iowan Old Style', serif; font-size: 56px; font-weight: 500; margin: 0; letter-spacing: -0.01em; }
+  .motto { font-family: Georgia, serif; font-style: italic; color: #a8a8a8; margin: 10px 0 34px; font-size: 19px; }
+  .def { background: var(--paper); color: var(--ink); border-radius: 14px; padding: 30px 34px; font-family: Georgia, serif; font-size: 18px; box-shadow: 0 0 0 1px rgba(255,255,255,.06), 0 12px 50px rgba(255,255,255,.07); }
+  .def strong { font-family: inherit; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; margin: 36px 0 12px; }
+  a.btn { display: inline-block; padding: 11px 20px; border-radius: 10px; text-decoration: none; font-weight: 600; font-size: 14.5px; }
+  a.primary { background: #f2f2f2; color: #111; }
+  a.ghost { color: #ddd; border: 1px solid #3a3a3a; }
+  a.ghost:hover, a.primary:hover { opacity: .85; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 44px; }
+  .card { border: 1px solid #2c2c2c; border-radius: 12px; padding: 20px; background: #171717; }
+  .card h3 { margin: 0 0 8px; font-size: 15px; }
+  .card p { margin: 0; color: #a8a8a8; font-size: 14px; }
+  .shot { margin-top: 48px; }
+  .shot img { width: 100%; border-radius: 12px; border: 1px solid #2c2c2c; display: block; }
+  .shot figcaption { color: #8a8a8a; font-size: 13px; margin-top: 8px; }
+  .num { font-family: ui-monospace, monospace; color: #8a8a8a; }
+  footer { margin-top: 64px; color: #777; font-size: 13.5px; border-top: 1px solid #2c2c2c; padding-top: 22px; }
+  footer a { color: #bbb; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Nullius</h1>
+  <p class="motto">Nullius in verba — take nobody's word for it.</p>
+
+  <div class="def">
+    AI models plan research, write and execute analysis code, and draft a manuscript on your machine.
+    Deterministic gates make sure <strong>no number and no citation enters the report unless it can be
+    traced to real evidence</strong>: sandbox-executed artifacts, Crossref-verified references, reproducible runs.
+  </div>
+
+  <div class="row">
+    <a class="btn primary" href="https://github.com/Mikopoto/nullius/releases">Download for macOS</a>
+    <a class="btn ghost" href="https://github.com/Mikopoto/nullius">GitHub</a>
+    <a class="btn ghost" href="https://github.com/Mikopoto/nullius/blob/main/docs/paper/nullius.pdf">Read the paper</a>
+  </div>
+
+  <div class="cols">
+    <div class="card">
+      <h3>Same model, two answers</h3>
+      <p>Asked directly, gpt-4o-mini reported a regression slope of <span class="num">1.9450</span> (truth: 3.0). Through Nullius, the same model produced a sandbox-executed <span class="num">3.0007</span> — and its fabricated statistics were blocked at the write boundary.</p>
+    </div>
+    <div class="card">
+      <h3>Built for AI agents</h3>
+      <p>Point Codex or Claude Code at the CLI: <span class="num">nullius verify --json</span> exits 0 only when every claim is traceable. Research gets the same red/green loop as code.</p>
+    </div>
+    <div class="card">
+      <h3>Local and open</h3>
+      <p>Runs on your machine; keys stay in the OS keychain; generated code runs in a WebAssembly sandbox with no network. MIT licensed.</p>
+    </div>
+  </div>
+
+  <figure class="shot">
+    <img src="screenshots/dark-manuscript.png" alt="Nullius dark theme: the manuscript glows white while a blocked patch shows sealed gate warnings">
+    <figcaption>The manuscript is the only light: blocked patches carry their gate verdicts.</figcaption>
+  </figure>
+  <figure class="shot">
+    <img src="screenshots/light-setup.png" alt="Nullius light theme: monochrome setup with keys, project, and plan adoption">
+    <figcaption>Ink on paper: the same interface in the light theme.</figcaption>
+  </figure>
+
+  <footer>
+    MIT © Studio Uchu · <a href="https://github.com/Mikopoto/nullius/blob/main/AGENTS.md">AGENTS.md</a> ·
+    <a href="https://github.com/Mikopoto/nullius/blob/main/docs/verify-contract.md">verify --json contract</a>
+  </footer>
+</div>
+</body>
+</html>

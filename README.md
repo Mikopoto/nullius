@@ -28,6 +28,13 @@
 
 Nullius lets AI models plan research, write and execute analysis code, and draft a manuscript, while deterministic gates make sure that **no number and no citation enters the report unless it can be traced to real evidence**. The name is from the Royal Society's motto, *nullius in verba*: take nobody's word for it.
 
+<p align="center">
+  <img src="docs/screenshots/dark-manuscript.png" alt="Nullius dark theme: the manuscript glows white; staged patches carry their gate verdicts; live activity streams on the right" width="100%">
+</p>
+<p align="center">
+  <sub>The manuscript is the only light: what you read has passed the gates. <a href="docs/screenshots/light-setup.png">Light theme</a> is one toggle away.</sub>
+</p>
+
 - Every quantitative claim must match a value in an artifact produced by locally executed, sandboxed code (value matching, not substring matching).
 - Every citation must resolve on Crossref and survive title/author/year/retraction checks.
 - Manuscript patches with any blocking warning are rejected **before** they are written, even in fully autonomous runs.
@@ -65,7 +72,9 @@ pnpm --filter @nullius/desktop tauri:dev
 
 ## Quick start (GUI)
 
-The app ships a built-in **Tutorial tab (English / 日本語)** with the full beginner flow. In short:
+**Fastest first look: press "Try the 60-second demo" on the Setup screen.** It seeds a sample project with a bundled CSV and runs the whole pipeline with free deterministic demo agents: you read the drafted plan, adopt it, and watch the gates admit only evidence-backed text. No API key, nothing billed.
+
+For real research, the app ships a built-in **Tutorial tab (English / 日本語)** with the full flow. In short:
 
 1. **API key** — Setup → API Keys. Easiest: an [OpenRouter](https://openrouter.ai) key (one key, many models). macOS stores it in the system Keychain; Windows/Linux keep it in memory for the session (use an environment variable to persist). Keys are never written to project files.
 2. **Project** — Setup → Project: Browse… to pick an empty folder and write your research question.
@@ -76,6 +85,21 @@ The app ships a built-in **Tutorial tab (English / 日本語)** with the full be
 7. **Review & export** — approve/reject staged patches in Manuscript, check the Readiness lights, Export. The result is `<project>/manuscript/report.md`.
 
 ## Quick start (CLI)
+
+**Try it free (no API key).** Deterministic local mock agents, no model calls:
+
+```bash
+nullius() { node packages/cli/dist/index.js "$@"; }   # build first: pnpm --filter @nullius/cli build
+
+nullius init demo --question "Is y linear in x?"
+nullius run demo --mock                           # drafts a plan, pauses
+nullius list plans demo                           # copy the plan id
+nullius adopt <planId> demo
+nullius run demo --mock                           # full mock pass
+nullius verify demo --json                        # gate report; exit 0 when every number traces
+```
+
+Then, with a real provider:
 
 ```bash
 nullius() { node packages/cli/dist/index.js "$@"; }
@@ -154,6 +178,10 @@ nullius models myproject --provider openrouter --model openrouter/auto
 The settings are written to `<project>/nullius.json`; API keys are not written to project files.
 
 `nullius verify --json [--gate numbers|citations|repro|all]` is a stable contract for **research CI**: wire it into your pipeline so no ungrounded number can merge, the same way tests gate code. Every field, the `schemaVersion` policy, and a full example are frozen in [`docs/verify-contract.md`](docs/verify-contract.md).
+
+## For AI agents
+
+If you are an AI agent driving this repository, read [`AGENTS.md`](AGENTS.md) first. It is the terse, copy-pastable contract for running research *through* Nullius: plan, adopt, run, review patches, verify, export, and never edit `manuscript/report.md` directly. The core rule is the exit-code contract: `nullius verify proj --json` exits 0 only when every number and citation traces to sandbox evidence; on a nonzero exit, read `failures[]` and fix by steering or rerunning, never by editing the report.
 
 ## Intended usage patterns
 

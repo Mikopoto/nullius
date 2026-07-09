@@ -5,7 +5,13 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "nullius": "dist/index.js"
+    "nullius": "dist-publish/nullius.cjs"
+  },
+  "files": [
+    "dist-publish"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "pnpm clean && tsc -p tsconfig.json",
@@ -13,14 +19,17 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "clean": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\"",
-    "bundle:action": "node scripts/bundle-action.mjs"
+    "bundle:action": "node scripts/bundle-action.mjs",
+    "bundle:publish": "node scripts/bundle-publish.mjs",
+    "prepublishOnly": "node scripts/bundle-publish.mjs"
   },
   "dependencies": {
-    "@nullius/core": "workspace:*",
-    "@nullius/server": "workspace:*",
     "commander": "^12.1.0"
   },
   "devDependencies": {
-    "esbuild": "^0.28.1"
+    "@nullius/core": "workspace:*",
+    "@nullius/server": "workspace:*",
+    "esbuild": "^0.28.1",
+    "vitest": "^2.1.8"
   }
 }

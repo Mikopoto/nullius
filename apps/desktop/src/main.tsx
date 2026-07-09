@@ -180,6 +180,7 @@ interface AppState {
   browseProjectFolder: () => Promise<void>;
   addDataFiles: () => Promise<void>;
   refreshData: () => Promise<void>;
+  runDemo: () => Promise<void>;
   generatePlan: () => Promise<void>;
   adoptPlan: (planId: string) => Promise<void>;
   setConsoleQuery: (value: string) => void;
@@ -326,6 +327,27 @@ const useAppState = create<AppState>((set, get) => ({
       set({ keyStatus: result.status });
     } catch {
       // Server not reachable yet; the Setup panel will retry on connect.
+    }
+  },
+  runDemo: async () => {
+    if (get().busy) return;
+    set({ busy: true, status: "Seeding the demo project...", streamLines: [] });
+    try {
+      const seeded = await get().command("demo.seed") as { root: string };
+      set({ projectRoot: seeded.root, useMock: true, questionDirty: false });
+      const snapshot = await get().command("project.open", { root: seeded.root }) as ProjectSnapshot;
+      set({ snapshot, question: snapshot.manifest.question });
+      await get().refreshData();
+      await get().command("run.start", { root: seeded.root, mock: true, backend: "auto" });
+      await get().refreshSnapshot();
+      set({
+        status: "Demo ready: Full Auto drafted a plan and paused. Read it below and press Adopt, then Run Full Auto.",
+        activePanel: "setup"
+      });
+    } catch (error) {
+      set({ status: `Demo failed: ${String(error)}` });
+    } finally {
+      set({ busy: false });
     }
   },
   generatePlan: async () => {
@@ -556,7 +578,16 @@ const useAppState = create<AppState>((set, get) => ({
   run: async () => {
     const root = requireProjectRoot(get, set);
     if (!root) return;
-    set({ busy: true, status: "Running Full Auto...", streamLines: [] });
+    const keys = get().keyStatus;
+    const hasAnyKey = Object.values(keys).some((source) => source && source !== "none");
+    if (!get().useMock && !hasAnyKey) {
+      set({
+        status: "No API key yet. Add one in Setup, or tick the mock checkbox to try Full Auto for free.",
+        activePanel: "setup"
+      });
+      return;
+    }
+    set({ busy: true, status: "Running Full Auto...", streamLines: [], intervention: undefined });
     try {
       const result = await get().command("run.start", { root, mock: get().useMock, backend: "auto" }) as FullAutoCommandResult;
       await get().refreshSnapshot();
@@ -569,7 +600,7 @@ const useAppState = create<AppState>((set, get) => ({
           activePanel: intervention.title.includes("Plan") ? "setup" : "manuscript"
         });
       } else {
-        set({ status: result.ready ? "Run completed: ready" : "Run completed: not ready", activePanel: "manuscript" });
+        set({ status: result.ready ? "Run completed: ready" : "Run completed: not ready", activePanel: "manuscript", intervention: undefined });
       }
     } catch (error) {
       set({ status: `Run failed: ${String(error)}` });
@@ -854,10 +885,19 @@ function SetupPanel() {
     refreshKeys: s.refreshKeys, setField: s.setField, setUseMock: s.setUseMock,
     browseProjectFolder: s.browseProjectFolder, createProject: s.createProject, connect: s.connect,
     addDataFiles: s.addDataFiles, setRole: s.setRole, saveModels: s.saveModels,
-    generatePlan: s.generatePlan, adoptPlan: s.adoptPlan
+    generatePlan: s.generatePlan, adoptPlan: s.adoptPlan, runDemo: s.runDemo
   })));
   return (
     <div className="panel two-column">
+      {!state.snapshot ? (
+        <section className="card demo-card">
+          <h2>New here? See it work first.</h2>
+          <p className="muted">One click seeds a sample project (bundled CSV, no API key, nothing billed) and runs the real pipeline with deterministic demo agents. You will read a plan, adopt it, and watch the gates admit only evidence-backed text.</p>
+          <div className="button-stack">
+            <button className="primary" disabled={state.busy} onClick={() => void state.runDemo()}>{state.busy ? "Working…" : "Try the 60-second demo"}</button>
+          </div>
+        </section>
+      ) : null}
       <section className="card">
         <h2><span className="step-chip">1</span>API Keys</h2>
         <p className="muted">On macOS the key is saved to the system Keychain. On Windows/Linux it is kept in memory until you close the app. Keys are never written to project files.</p>

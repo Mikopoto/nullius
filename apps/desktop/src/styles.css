@@ -571,3 +571,7 @@ details.advanced > summary {
 details.advanced > summary::before { content: "▸"; font-size: 10px; transition: transform 160ms var(--ease); }
 details.advanced[open] > summary::before { transform: rotate(90deg); }
 details.advanced > summary:hover { color: var(--ink); }
+
+/* ---------- Demo card ---------- */
+.demo-card { border-style: dashed; border-color: var(--line-2); background: var(--bg-2); }
+.demo-card h2 { font-family: var(--display); font-weight: 560; font-size: 17px; }

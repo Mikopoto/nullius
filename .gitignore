@@ -18,3 +18,4 @@ docs/paper/*.synctex.gz
 
 # The GitHub Action ships its bundled CLI (Actions convention)
 !action/dist/
+dist-publish/

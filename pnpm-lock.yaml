@@ -69,19 +69,22 @@ importers:
 
   packages/cli:
     dependencies:
+      commander:
+        specifier: ^12.1.0
+        version: 12.1.0
+    devDependencies:
       '@nullius/core':
         specifier: workspace:*
         version: link:../core
       '@nullius/server':
         specifier: workspace:*
         version: link:../server
-      commander:
-        specifier: ^12.1.0
-        version: 12.1.0
-    devDependencies:
       esbuild:
         specifier: ^0.28.1
         version: 0.28.1
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.0)
 
   packages/conformance:
     dependencies:

@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { randomUUID } from "node:crypto";
 import { cp, mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { tmpdir } from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
 import { z } from "zod";
 import {
@@ -62,6 +63,7 @@ export const ServerCommandSchema = z.object({
     "data.import",
     "data.list",
     "patch.preview",
+    "demo.seed",
     "project.configure",
     "activity.watch",
     "activity.list"
@@ -457,6 +459,32 @@ export async function startNulliusServer(options: { port?: number } = {}): Promi
         });
         await broadcastStateChanged(parsed.command, payload.root);
         return { ok: true, plan: adopted };
+      }
+      case "demo.seed": {
+        const root = join(tmpdir(), `nullius-demo-${randomUUID().slice(0, 8)}`);
+        await createProject(root, {
+          schemaVersion: 1,
+          name: "Nullius demo",
+          question: "In data/measurements.csv, is y consistent with a linear relation y = a*x + b, and what is the slope a?",
+          roles: {
+            planner: { provider: "openrouter", model: "openrouter/auto", reasoningEffort: "none" },
+            executor: { provider: "openrouter", model: "openrouter/auto", reasoningEffort: "none" },
+            reviewer: { provider: "openrouter", model: "openrouter/auto", reasoningEffort: "none" }
+          },
+          settings: { maxLanes: 1, maxNodes: 3, depth: "quick", sandboxPolicy: "required", selfCorrectionRounds: 1 },
+          amendments: []
+        });
+        const rows = ["x,y"];
+        for (let i = 0; i < 40; i += 1) {
+          const x = i * 0.5;
+          // Deterministic pseudo-noise keeps the demo reproducible without Math.random.
+          const noise = 0.3 * Math.sin(i * 12.9898) * Math.cos(i * 78.233);
+          rows.push(`${x.toFixed(2)},${(2.0 * x + 1.0 + noise).toFixed(4)}`);
+        }
+        await mkdir(join(root, "data"), { recursive: true });
+        await writeFile(join(root, "data", "measurements.csv"), rows.join("\n") + "\n", "utf8");
+        await broadcastStateChanged(parsed.command, root);
+        return { ok: true, root };
       }
       case "patch.preview": {
         const payload = PatchPayload.parse(parsed.payload);

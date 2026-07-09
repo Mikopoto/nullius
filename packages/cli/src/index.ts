@@ -34,6 +34,7 @@ import {
   type ProjectManifest
 } from "@nullius/core";
 import { startNulliusServer } from "@nullius/server";
+import { buildListResult, formatListLines, isListKind, listKinds } from "./list.js";
 
 const program = new Command();
 const providerChoices = ["openrouter", "openai", "anthropic", "customOpenAICompatible"] as const;
@@ -195,6 +196,27 @@ program
     const snapshot = await loadProject(folder);
     const report = readinessReport(snapshotToGateProject(snapshot), snapshot.manifest.settings.depth, projectGateIO(folder));
     process.stdout.write(`${report.ready ? "Ready" : "Not ready"} · ${Math.round(report.readinessScore * 100)}% · claims ${report.supportedClaims} · patches ${snapshot.patches.length}\n`);
+  });
+
+program
+  .command("list")
+  .description("List ids for plans, patches, nodes, claims, or evidence")
+  .argument("<kind>", `item kind: ${listKinds.join(", ")}`)
+  .argument("[folder]", "project folder", ".")
+  .option("--json", "print JSON")
+  .action(async (kind: string, folder: string, options: { json?: boolean }) => {
+    if (!isListKind(kind)) {
+      process.stderr.write(`Unknown kind: ${kind}. Expected one of: ${listKinds.join(", ")}\n`);
+      process.exitCode = 2;
+      return;
+    }
+    const snapshot = await loadProject(folder);
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify(buildListResult(snapshot, kind), null, 2)}\n`);
+      return;
+    }
+    const lines = formatListLines(snapshot, kind);
+    process.stdout.write(lines.length > 0 ? `${lines.join("\n")}\n` : `No ${kind} found\n`);
   });
 
 const modelsCommand = program

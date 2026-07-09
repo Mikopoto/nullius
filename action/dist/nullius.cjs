@@ -13462,6 +13462,7 @@ var import_node_http = require("node:http");
 var import_node_crypto5 = require("node:crypto");
 var import_promises7 = require("node:fs/promises");
 var import_node_path7 = require("node:path");
+var import_node_os2 = require("node:os");
 
 // ../../node_modules/.pnpm/ws@8.21.0/node_modules/ws/wrapper.mjs
 var import_stream = __toESM(require_stream(), 1);
@@ -13498,6 +13499,7 @@ var ServerCommandSchema = external_exports.object({
     "data.import",
     "data.list",
     "patch.preview",
+    "demo.seed",
     "project.configure",
     "activity.watch",
     "activity.list"
@@ -13854,6 +13856,31 @@ async function startNulliusServer(options = {}) {
         });
         await broadcastStateChanged(parsed.command, payload.root);
         return { ok: true, plan: adopted };
+      }
+      case "demo.seed": {
+        const root = (0, import_node_path7.join)((0, import_node_os2.tmpdir)(), `nullius-demo-${(0, import_node_crypto5.randomUUID)().slice(0, 8)}`);
+        await createProject(root, {
+          schemaVersion: 1,
+          name: "Nullius demo",
+          question: "In data/measurements.csv, is y consistent with a linear relation y = a*x + b, and what is the slope a?",
+          roles: {
+            planner: { provider: "openrouter", model: "openrouter/auto", reasoningEffort: "none" },
+            executor: { provider: "openrouter", model: "openrouter/auto", reasoningEffort: "none" },
+            reviewer: { provider: "openrouter", model: "openrouter/auto", reasoningEffort: "none" }
+          },
+          settings: { maxLanes: 1, maxNodes: 3, depth: "quick", sandboxPolicy: "required", selfCorrectionRounds: 1 },
+          amendments: []
+        });
+        const rows = ["x,y"];
+        for (let i = 0; i < 40; i += 1) {
+          const x = i * 0.5;
+          const noise = 0.3 * Math.sin(i * 12.9898) * Math.cos(i * 78.233);
+          rows.push(`${x.toFixed(2)},${(2 * x + 1 + noise).toFixed(4)}`);
+        }
+        await (0, import_promises7.mkdir)((0, import_node_path7.join)(root, "data"), { recursive: true });
+        await (0, import_promises7.writeFile)((0, import_node_path7.join)(root, "data", "measurements.csv"), rows.join("\n") + "\n", "utf8");
+        await broadcastStateChanged(parsed.command, root);
+        return { ok: true, root };
       }
       case "patch.preview": {
         const payload = PatchPayload.parse(parsed.payload);
@@ -14233,6 +14260,67 @@ function runCapture(command, args) {
   });
 }
 
+// src/list.ts
+var LIST_SCHEMA_VERSION = 1;
+var listKinds = ["plans", "patches", "nodes", "claims", "evidence"];
+function isListKind(value) {
+  return listKinds.includes(value);
+}
+function buildListResult(snapshot, kind) {
+  return { schemaVersion: LIST_SCHEMA_VERSION, kind, items: validatedItems(snapshot, kind) };
+}
+function validatedItems(snapshot, kind) {
+  switch (kind) {
+    case "plans":
+      return snapshot.plans.map((item) => PlanSchema.parse(item));
+    case "patches":
+      return snapshot.patches.map((item) => PatchSchema.parse(item));
+    case "nodes":
+      return snapshot.lanes.flatMap((lane) => lane.nodes).map((item) => NodeRecordSchema.parse(item));
+    case "claims":
+      return snapshot.claims.map((item) => ClaimSchema.parse(item));
+    case "evidence":
+      return snapshot.evidence.map((item) => EvidenceItemSchema.parse(item));
+  }
+}
+function formatListLines(snapshot, kind) {
+  switch (kind) {
+    case "plans":
+      return snapshot.plans.map(formatPlanLine);
+    case "patches":
+      return snapshot.patches.map(formatPatchLine);
+    case "nodes":
+      return snapshot.lanes.flatMap((lane) => lane.nodes.map((node) => formatNodeLine(node, lane.name)));
+    case "claims":
+      return snapshot.claims.map(formatClaimLine);
+    case "evidence":
+      return snapshot.evidence.map(formatEvidenceLine);
+  }
+}
+function formatPlanLine(plan) {
+  return [shortId(plan.id), plan.approved ? "adopted" : "pending", truncate(plan.title, 70)].join("  ");
+}
+function formatPatchLine(patch) {
+  const blocking = patch.warnings.filter((warning) => warning.blocking).length;
+  return [shortId(patch.id), patch.status, `${blocking} blocking`].join("  ");
+}
+function formatNodeLine(node, laneName) {
+  return [shortId(node.id), truncate(laneName, 70), node.status, node.reproducibility].join("  ");
+}
+function formatClaimLine(claim) {
+  return [shortId(claim.id), claim.type, claim.review, truncate(claim.text, 70)].join("  ");
+}
+function formatEvidenceLine(evidence) {
+  return [shortId(evidence.id), `${evidence.review}/${evidence.validation}`, evidence.path ?? "(no path)"].join("  ");
+}
+function shortId(id) {
+  return id.length > 8 ? id.slice(0, 8) : id;
+}
+function truncate(text, max) {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  return collapsed.length > max ? `${collapsed.slice(0, max - 1)}\u2026` : collapsed;
+}
+
 // src/index.ts
 var program2 = new Command();
 var providerChoices = ["openrouter", "openai", "anthropic", "customOpenAICompatible"];
@@ -14336,6 +14424,24 @@ program2.command("status").description("Print project readiness status").argumen
   const snapshot = await loadProject(folder);
   const report = readinessReport(snapshotToGateProject(snapshot), snapshot.manifest.settings.depth, projectGateIO(folder));
   process.stdout.write(`${report.ready ? "Ready" : "Not ready"} \xB7 ${Math.round(report.readinessScore * 100)}% \xB7 claims ${report.supportedClaims} \xB7 patches ${snapshot.patches.length}
+`);
+});
+program2.command("list").description("List ids for plans, patches, nodes, claims, or evidence").argument("<kind>", `item kind: ${listKinds.join(", ")}`).argument("[folder]", "project folder", ".").option("--json", "print JSON").action(async (kind, folder, options) => {
+  if (!isListKind(kind)) {
+    process.stderr.write(`Unknown kind: ${kind}. Expected one of: ${listKinds.join(", ")}
+`);
+    process.exitCode = 2;
+    return;
+  }
+  const snapshot = await loadProject(folder);
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(buildListResult(snapshot, kind), null, 2)}
+`);
+    return;
+  }
+  const lines = formatListLines(snapshot, kind);
+  process.stdout.write(lines.length > 0 ? `${lines.join("\n")}
+` : `No ${kind} found
 `);
 });
 var modelsCommand = program2.command("models").description("Show or update planner/executor/reviewer provider and model settings").argument("[folder]", "project folder", ".");
