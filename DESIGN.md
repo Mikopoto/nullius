@@ -4,7 +4,9 @@
 
 Single light theme everywhere ("paper and ink"). No dark surfaces: the former dark console is replaced by a light Activity pane on a second neutral layer. Scene: a researcher at a daylight desk supervising a run, reading for long stretches.
 
-## Color (OKLCH, restrained strategy)
+## Color (OKLCH, monochrome strategy)
+
+The palette is strictly monochrome (chroma 0 everywhere): black-room dark theme and ink-on-white light theme. State is carried by symbols (check, cross, exclamation), fill vs outline, and weight, never by hue. The manuscript surface stays paper-white in both themes.
 
 - `--bg` oklch(0.977 0.002 260) — content surface, cool-neutral off-white (not cream)
 - `--bg-2` oklch(0.955 0.004 260) — second neutral layer: sidebar, activity pane, wells

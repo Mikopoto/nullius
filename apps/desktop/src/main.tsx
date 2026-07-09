@@ -598,8 +598,8 @@ const useAppState = create<AppState>((set, get) => ({
     try {
       const result = await get().command("export.markdown", { root }) as { body: string };
       set((state) => state.snapshot
-        ? { snapshot: { ...state.snapshot, manuscriptBody: result.body }, status: "Markdown loaded" }
-        : { status: "Markdown loaded" });
+        ? { snapshot: { ...state.snapshot, manuscriptBody: result.body }, status: `Report exported: ${root}/manuscript/report.md`, activePanel: "manuscript" }
+        : { status: `Report exported: ${root}/manuscript/report.md`, activePanel: "manuscript" });
     } catch (error) {
       set({ status: `Export failed: ${String(error)}` });
     } finally {
@@ -913,6 +913,8 @@ function SetupPanel() {
         <div className="button-stack">
           {isTauri() ? <button onClick={() => void state.addDataFiles()}>Add data files…</button> : <span className="muted">In a browser, copy files into &lt;project&gt;/data/ manually.</span>}
         </div>
+        <details className="advanced">
+          <summary>Advanced settings</summary>
         <label>AI models (per role)</label>
         {(["planner", "executor", "reviewer"] as RoleName[]).map((role) => (
           <div className="role-row" key={role}>
@@ -932,6 +934,7 @@ function SetupPanel() {
         <label>Server URL</label>
         <input value={state.serverUrl} onChange={(event) => state.setField("serverUrl", event.currentTarget.value)} />
         <p className="muted">The desktop app starts the local server automatically. In a browser, run `node packages/cli/dist/index.js serve --port 8787`, then open the project.</p>
+        </details>
       </section>
       <section className="card">
         <h2><span className="step-chip">3</span>Plans</h2>
@@ -1169,7 +1172,7 @@ function DAGPanel() {
     lane.nodes.map((node, nodeIndex) => ({
       id: node.id,
       position: { x: 240 * nodeIndex, y: 120 * laneIndex },
-      data: { label: `${node.title}\n${node.status}` },
+      data: { label: `${node.title} · ${node.status}` },
       type: "default"
     }))
   ) ?? [];
@@ -1349,6 +1352,7 @@ function InterventionCard({ status }: { status: string }) {
   const steer = useAppState((state) => state.steer);
   const setPanel = useAppState((state) => state.setPanel);
   const plans = useAppState((state) => state.snapshot?.plans);
+  const externalRun = useAppState((state) => state.externalRun);
   const needsAdoption = /plan adoption|adopt/i.test(intervention?.title ?? "") && (plans ?? []).some((plan) => !plan.approved);
   const saveInstruction = async () => {
     await steer(instruction);
@@ -1363,8 +1367,8 @@ function InterventionCard({ status }: { status: string }) {
       ) : null}
       <textarea value={instruction} onChange={(event) => setInstruction(event.currentTarget.value)} placeholder="Steering instruction for the next step" />
       <div className="intervention-actions">
-        <button disabled={busy} onClick={() => void resumeRun()}>Resume</button>
-        <button disabled={!busy} onClick={() => void stopRun()}>Stop</button>
+        <button disabled={busy || !intervention} onClick={() => void resumeRun()}>Resume</button>
+        <button disabled={!busy && !externalRun} onClick={() => void stopRun()}>Stop</button>
         <button disabled={!instruction.trim()} onClick={() => void saveInstruction()}>Save instruction</button>
       </div>
     </section>
