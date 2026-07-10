@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, writeFile, readdir } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { z } from "zod";
 import {
@@ -100,6 +100,32 @@ export function evidenceArtifactPath(root: string, evidence: EvidenceItem): stri
   if (isAbsolute(evidence.path)) return evidence.path;
   if (evidence.laneId && evidence.nodeId) return join(root, "lanes", evidence.laneId, "nodes", evidence.nodeId, evidence.path);
   return join(root, evidence.path);
+}
+
+
+const maxGroundingArtifactBytes = 2 * 1024 * 1024;
+
+/** Real artifact bytes for numeric grounding; falls back to the recorded summary
+    when a file is missing, binary, or oversized. */
+export function loadArtifactTexts(root: string, evidence: Array<{ laneId?: string | undefined; nodeId?: string | undefined; path?: string | undefined; summary?: string | undefined }>): string[] {
+  const texts: string[] = [];
+  for (const item of evidence) {
+    let loaded: string | undefined;
+    if (item.path && item.laneId && item.nodeId) {
+      const absolute = join(root, "lanes", item.laneId, "nodes", item.nodeId, item.path);
+      try {
+        const stats = statSync(absolute);
+        if (stats.isFile() && stats.size <= maxGroundingArtifactBytes) {
+          loaded = readFileSync(absolute, "utf8");
+        }
+      } catch {
+        loaded = undefined;
+      }
+    }
+    const text = loaded ?? item.summary;
+    if (text) texts.push(text);
+  }
+  return texts;
 }
 
 export function projectGateIO(root: string): GateIO {

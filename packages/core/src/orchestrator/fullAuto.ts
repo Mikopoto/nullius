@@ -12,6 +12,7 @@ import {
 } from "../gates/evidence.js";
 import type { AgentRunResult, Claim, EvidenceItem, Lane, NodeRecord, NodeReview, Patch, Plan, ProjectManifest, SourceActivity } from "../model/schemas.js";
 import {
+  loadArtifactTexts,
   atomicWriteText,
   loadProject,
   projectGateIO,
@@ -72,6 +73,10 @@ export type AgentStreamDelta =
 
 export interface AgentCallOptions {
   onStream?: (delta: AgentStreamDelta) => void;
+  /** Invoked with the exact prompts before the model call, for the audit transcript. */
+  onCall?: (record: { systemPrompt: string; userPrompt: string }) => void;
+  /** Invoked with the raw model response text after the call. */
+  onResponse?: (text: string) => void;
   /** Relative names of user-supplied input files available at ./data inside the node working directory. */
   dataFiles?: string[];
 }
@@ -144,6 +149,13 @@ export class FullAutoOrchestrator {
       await this.transcriptStore.append(root, runId, { kind: "event", role: full.role, text: `${full.title}${full.detail ? `\n${full.detail}` : ""}` });
     };
     const streamOptions = (role: FullAutoEvent["role"], purpose: string): AgentCallOptions => ({
+      onCall: (record) => {
+        void this.transcriptStore.append(root, runId, { kind: "systemPrompt", role, text: `[${purpose}]\n${record.systemPrompt}` });
+        void this.transcriptStore.append(root, runId, { kind: "userPrompt", role, text: record.userPrompt });
+      },
+      onResponse: (text) => {
+        void this.transcriptStore.append(root, runId, { kind: "response", role, text });
+      },
       onStream: (delta) => {
         const kind = delta.type;
         options.onStream?.({
@@ -393,7 +405,7 @@ export class FullAutoOrchestrator {
     };
     const patch = stageManuscriptPatch(projectForPatch, synthesis.body, {
       autoApprove: true,
-      artifactTexts: evidence.map((entry) => entry.summary).filter(Boolean)
+      artifactTexts: loadArtifactTexts(root, evidence.filter((entry) => entry.validation === "valid" && entry.review !== "rejected"))
     });
     await savePatch(root, patch);
     await emit({ kind: "patch.staged", role: "synthesizer", title: "Patch staged", detail: patch.status });

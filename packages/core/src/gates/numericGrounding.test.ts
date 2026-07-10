@@ -38,3 +38,27 @@ describe("numeric grounding", () => {
   });
 });
 
+describe("round 6 gate hardening", () => {
+  it("hard-blocks integer percentages as numbers, grounded via /100", () => {
+    const body = "# Results\nAccuracy reached 95% on the held-out set.";
+    const ungrounded = groundingReport(body, ["{}"]);
+    expect(ungrounded.checkedNumbers).toContain("95%");
+    expect(ungrounded.ungroundedNumbers).toContain("95%");
+    const grounded = groundingReport(body, ['{"accuracy": 0.95}']);
+    expect(grounded.ungroundedNumbers).toEqual([]);
+  });
+
+  it("grounds integers by value across formatting (thousands separators, trailing .0)", () => {
+    const body = "# Results\nWe analyzed 4212 records.";
+    expect(groundingReport(body, ["count,4212.0"]).ungroundedIntegers).toEqual([]);
+    expect(groundingReport(body, ["total: 4,212 rows"]).ungroundedIntegers).toEqual([]);
+    expect(groundingReport(body, ["count,999"]).ungroundedIntegers).toContain("4212");
+  });
+
+  it("full scope catches a fabricated decimal hidden in Methods", () => {
+    const body = "# Methods\nWe set alpha to 0.0731 for no reason.\n# Results\nAll good.";
+    expect(groundingReport(body, ["{}"]).ungroundedNumbers).toEqual([]);
+    expect(groundingReport(body, ["{}"], { scope: "full" }).ungroundedNumbers).toContain("0.0731");
+  });
+});
+

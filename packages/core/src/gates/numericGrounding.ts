@@ -6,7 +6,7 @@ export interface NumericGroundingReport {
 }
 
 const scannableExtensions = new Set(["csv", "tsv", "json", "txt", "log", "md", "dat"]);
-const floatLikePattern = /[-+]?(?:\d+(?:\.\d+)?[eE][-+]?\d+|\d+\.\d+)(?:%)?/g;
+const floatLikePattern = /[-+]?(?:\d+(?:\.\d+)?[eE][-+]?\d+|\d+\.\d+)(?:%)?|(?<![\d.eE+-])\d+%/g;
 const integerPattern = /(?<![\d.eE+-])\d{2,}(?![\d.eE+-])/g;
 const artifactNumberPattern = /[-+]?(?:\d+(?:\.\d+)?[eE][-+]?\d+|\d+\.\d+|\d+)(?:%)?/g;
 
@@ -67,15 +67,19 @@ export function significantIntegers(text: string): string[] {
   });
 }
 
-export function groundingReport(body: string, artifactTexts: string[]): NumericGroundingReport {
-  const checkedText = targetSectionText(body);
+export function groundingReport(body: string, artifactTexts: string[], options: { scope?: "sections" | "full" } = {}): NumericGroundingReport {
+  const checkedText = options.scope === "full" ? stripCodeFences(body) : targetSectionText(body);
   const numbers = unique(significantNumbers(checkedText));
   const integers = unique(significantIntegers(checkedText));
   const artifactValues = parseArtifactValues(artifactTexts);
   const artifactIntegers = parseArtifactIntegers(artifactTexts);
 
   const ungroundedNumbers = numbers.filter((value) => !isGroundedNumber(value, artifactValues));
-  const ungroundedIntegers = integers.filter((value) => !artifactIntegers.has(value));
+  const ungroundedIntegers = integers.filter((value) => {
+    if (artifactIntegers.has(value)) return false;
+    const numeric = Number(value);
+    return !artifactValues.some((candidate) => candidate === numeric);
+  });
 
   return {
     checkedNumbers: numbers,
@@ -93,6 +97,7 @@ export function isScannablePath(path: string | undefined): boolean {
 
 function parseArtifactValues(artifactTexts: string[]): number[] {
   const values: number[] = [];
+  artifactTexts = artifactTexts.map((text) => text.replace(/(\d),(?=\d{3}\b)/g, "$1"));
   for (const text of artifactTexts) {
     for (const match of text.matchAll(artifactNumberPattern)) {
       const parsed = parseNumericToken(match[0]);

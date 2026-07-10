@@ -10989,7 +10989,7 @@ var AgentRunResultSchema = external_exports.object({
 
 // ../core/dist/gates/numericGrounding.js
 var scannableExtensions = /* @__PURE__ */ new Set(["csv", "tsv", "json", "txt", "log", "md", "dat"]);
-var floatLikePattern = /[-+]?(?:\d+(?:\.\d+)?[eE][-+]?\d+|\d+\.\d+)(?:%)?/g;
+var floatLikePattern = /[-+]?(?:\d+(?:\.\d+)?[eE][-+]?\d+|\d+\.\d+)(?:%)?|(?<![\d.eE+-])\d+%/g;
 var integerPattern = /(?<![\d.eE+-])\d{2,}(?![\d.eE+-])/g;
 var artifactNumberPattern = /[-+]?(?:\d+(?:\.\d+)?[eE][-+]?\d+|\d+\.\d+|\d+)(?:%)?/g;
 function stripCodeFences(markdown) {
@@ -11025,14 +11025,19 @@ function significantIntegers(text) {
     return Number.isFinite(number) && !(number >= 1900 && number <= 2099);
   });
 }
-function groundingReport(body, artifactTexts) {
-  const checkedText = targetSectionText(body);
+function groundingReport(body, artifactTexts, options = {}) {
+  const checkedText = options.scope === "full" ? stripCodeFences(body) : targetSectionText(body);
   const numbers = unique(significantNumbers(checkedText));
   const integers = unique(significantIntegers(checkedText));
   const artifactValues = parseArtifactValues(artifactTexts);
   const artifactIntegers = parseArtifactIntegers(artifactTexts);
   const ungroundedNumbers = numbers.filter((value) => !isGroundedNumber(value, artifactValues));
-  const ungroundedIntegers = integers.filter((value) => !artifactIntegers.has(value));
+  const ungroundedIntegers = integers.filter((value) => {
+    if (artifactIntegers.has(value))
+      return false;
+    const numeric = Number(value);
+    return !artifactValues.some((candidate) => candidate === numeric);
+  });
   return {
     checkedNumbers: numbers,
     ungroundedNumbers,
@@ -11048,6 +11053,7 @@ function isScannablePath(path) {
 }
 function parseArtifactValues(artifactTexts) {
   const values = [];
+  artifactTexts = artifactTexts.map((text) => text.replace(/(\d),(?=\d{3}\b)/g, "$1"));
   for (const text of artifactTexts) {
     for (const match of text.matchAll(artifactNumberPattern)) {
       const parsed = parseNumericToken(match[0]);
@@ -11370,7 +11376,7 @@ function stageManuscriptPatch(project, newBody, options = {}) {
   const markers = blockingMarkers(newBody);
   const leaks = internalOutputLeakTerms(newBody);
   const artifactTexts = options.artifactTexts ?? project.evidence.filter((evidence) => evidence.validation === "valid" && evidence.review !== "rejected" && isScannablePath(evidence.path)).map((evidence) => evidence.summary);
-  const numeric = groundingReport(newBody, artifactTexts);
+  const numeric = groundingReport(newBody, artifactTexts, { scope: "full" });
   const unverifiedKeys = citationKeys(newBody).filter((key) => !citationIsAllowed(project, key));
   const warnings = [
     ...invalidRefs.map((ref) => ({
@@ -12021,8 +12027,17 @@ var SandboxExecBackend = class {
     await (0, import_promises.mkdir)((0, import_node_path.join)(nodeDir, "scripts"), { recursive: true });
     const scriptPath = (0, import_node_path.join)(nodeDir, "scripts", "generated.py");
     await (0, import_promises.writeFile)(scriptPath, code, "utf8");
-    const profile = sandboxProfile(nodeDir);
-    const result = await runHostProcess("sandbox-exec", ["-p", profile, this.pythonPath, scriptPath], nodeDir, (options.timeoutSec ?? 60) * 1e3, options.signal);
+    const runtimeRoots = this.pythonPath.startsWith("/Users/") ? [(0, import_node_path.dirname)((0, import_node_path.dirname)(this.pythonPath))] : [];
+    const profile = sandboxProfile(nodeDir, runtimeRoots);
+    const cpuCap = Math.max(10, Math.min(600, (options.timeoutSec ?? 60) * 2));
+    const shellCommand = [
+      `ulimit -t ${cpuCap} 2>/dev/null`,
+      "ulimit -f 8388608 2>/dev/null",
+      "ulimit -n 512 2>/dev/null",
+      "ulimit -u 256 2>/dev/null",
+      'exec sandbox-exec -p "$0" "$1" "$2"'
+    ].join("; ");
+    const result = await runHostProcess("/bin/sh", ["-c", shellCommand, profile, this.pythonPath, scriptPath], nodeDir, (options.timeoutSec ?? 60) * 1e3, options.signal);
     await persistLogs(nodeDir, result.stdout, result.stderr);
     const generatedFiles = result.exitCode === 0 ? await collectHostGeneratedFiles(nodeDir, options) : [];
     return {
@@ -12254,16 +12269,26 @@ function rejected(kind, reason) {
     error: reason
   };
 }
-function sandboxProfile(nodeDir) {
-  const escapedNodeDir = nodeDir.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+function sandboxProfile(nodeDir, runtimeRoots = []) {
+  const escape = (path) => path.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const withPrivate = (path) => /^\/(?:tmp|var|etc)(?:\/|$)/.test(path) ? [path, `/private${path}`] : [path];
+  const nodePaths = withPrivate(nodeDir).map((path) => `(subpath "${escape(path)}")`).join(" ");
+  const runtimePaths = runtimeRoots.flatMap(withPrivate).map((path) => `(subpath "${escape(path)}")`).join(" ");
   return [
     "(version 1)",
     "(deny default)",
     "(allow process*)",
     "(allow sysctl-read)",
-    '(allow file-read* (subpath "/System") (subpath "/usr") (subpath "/bin") (subpath "/sbin") (subpath "/Library") (subpath "/private/var/db"))',
-    `(allow file-read* (subpath "${escapedNodeDir}"))`,
-    `(allow file-write* (subpath "${escapedNodeDir}"))`,
+    "(allow mach-lookup)",
+    "(allow file-read-metadata)",
+    // Deny-list model, matching the reference design: system reads are allowed
+    // (the interpreter needs dyld caches, locales, /dev), the user's home is
+    // denied wholesale, and only the node folder (plus an explicitly named
+    // runtime root, e.g. a pyenv install) is re-allowed beneath it.
+    "(allow file-read*)",
+    '(deny file-read* (subpath "/Users"))',
+    `(allow file-read* ${nodePaths}${runtimePaths ? " " + runtimePaths : ""})`,
+    `(allow file-write* ${nodePaths} (literal "/dev/null") (literal "/dev/tty"))`,
     "(deny network*)"
   ].join("\n");
 }
@@ -12361,6 +12386,28 @@ function evidenceArtifactPath(root, evidence) {
   if (evidence.laneId && evidence.nodeId)
     return (0, import_node_path2.join)(root, "lanes", evidence.laneId, "nodes", evidence.nodeId, evidence.path);
   return (0, import_node_path2.join)(root, evidence.path);
+}
+var maxGroundingArtifactBytes = 2 * 1024 * 1024;
+function loadArtifactTexts(root, evidence) {
+  const texts = [];
+  for (const item of evidence) {
+    let loaded;
+    if (item.path && item.laneId && item.nodeId) {
+      const absolute = (0, import_node_path2.join)(root, "lanes", item.laneId, "nodes", item.nodeId, item.path);
+      try {
+        const stats = (0, import_node_fs2.statSync)(absolute);
+        if (stats.isFile() && stats.size <= maxGroundingArtifactBytes) {
+          loaded = (0, import_node_fs2.readFileSync)(absolute, "utf8");
+        }
+      } catch {
+        loaded = void 0;
+      }
+    }
+    const text = loaded ?? item.summary;
+    if (text)
+      texts.push(text);
+  }
+  return texts;
 }
 function projectGateIO(root) {
   return {
@@ -12671,6 +12718,14 @@ var FullAutoOrchestrator = class {
 ${full.detail}` : ""}` });
     };
     const streamOptions = (role, purpose) => ({
+      onCall: (record) => {
+        void this.transcriptStore.append(root, runId, { kind: "systemPrompt", role, text: `[${purpose}]
+${record.systemPrompt}` });
+        void this.transcriptStore.append(root, runId, { kind: "userPrompt", role, text: record.userPrompt });
+      },
+      onResponse: (text) => {
+        void this.transcriptStore.append(root, runId, { kind: "response", role, text });
+      },
       onStream: (delta) => {
         const kind = delta.type;
         options.onStream?.({
@@ -12892,7 +12947,7 @@ Adopt a plan before Full Auto can execute it.` });
     };
     const patch = stageManuscriptPatch(projectForPatch, synthesis.body, {
       autoApprove: true,
-      artifactTexts: evidence.map((entry) => entry.summary).filter(Boolean)
+      artifactTexts: loadArtifactTexts(root, evidence.filter((entry) => entry.validation === "valid" && entry.review !== "rejected"))
     });
     await savePatch(root, patch);
     await emit({ kind: "patch.staged", role: "synthesizer", title: "Patch staged", detail: patch.status });
@@ -13212,10 +13267,16 @@ ${JSON.stringify(context, null, 2)}`);
   }
   async completeStructured(role, purpose, systemPrompt, userPrompt, options) {
     if (role.provider === "codexCli" || role.provider === "claudeCode" || role.provider === "opencode") {
-      return runTerminalJSONAgent(role, purpose, systemPrompt, userPrompt, this.env, this.terminalTimeoutMs, options);
+      options?.onCall?.({ systemPrompt, userPrompt });
+      const result = await runTerminalJSONAgent(role, purpose, systemPrompt, userPrompt, this.env, this.terminalTimeoutMs, options);
+      options?.onResponse?.(JSON.stringify(result));
+      return result;
     }
     const config = providerConfigFromRole(role, this.env);
-    return completeJSON(systemPrompt, userPrompt, config, options?.onStream ? { stream: options.onStream } : {});
+    options?.onCall?.({ systemPrompt, userPrompt });
+    const parsed = await completeJSON(systemPrompt, userPrompt, config, options?.onStream ? { stream: options.onStream } : {});
+    options?.onResponse?.(typeof parsed === "string" ? parsed : JSON.stringify(parsed));
+    return parsed;
   }
 };
 function asRecord(value) {

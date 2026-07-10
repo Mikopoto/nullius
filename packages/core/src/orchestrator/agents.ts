@@ -134,10 +134,16 @@ export class RoleSeparatedResearchAgents implements ResearchAgents {
 
   private async completeStructured(role: AgentRole, purpose: string, systemPrompt: string, userPrompt: string, options?: AgentCallOptions): Promise<unknown> {
     if (role.provider === "codexCli" || role.provider === "claudeCode" || role.provider === "opencode") {
-      return runTerminalJSONAgent(role, purpose, systemPrompt, userPrompt, this.env, this.terminalTimeoutMs, options);
+      options?.onCall?.({ systemPrompt, userPrompt });
+      const result = await runTerminalJSONAgent(role, purpose, systemPrompt, userPrompt, this.env, this.terminalTimeoutMs, options);
+      options?.onResponse?.(JSON.stringify(result));
+      return result;
     }
     const config = providerConfigFromRole(role, this.env);
-    return completeJSON(systemPrompt, userPrompt, config, options?.onStream ? { stream: options.onStream } : {});
+    options?.onCall?.({ systemPrompt, userPrompt });
+    const parsed = await completeJSON(systemPrompt, userPrompt, config, options?.onStream ? { stream: options.onStream } : {});
+    options?.onResponse?.(typeof parsed === "string" ? parsed : JSON.stringify(parsed));
+    return parsed;
   }
 }
 

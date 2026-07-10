@@ -247,7 +247,7 @@ export function stageManuscriptPatch(
   const markers = blockingMarkers(newBody);
   const leaks = internalOutputLeakTerms(newBody);
   const artifactTexts = options.artifactTexts ?? project.evidence.filter((evidence) => evidence.validation === "valid" && evidence.review !== "rejected" && isScannablePath(evidence.path)).map((evidence) => evidence.summary);
-  const numeric = groundingReport(newBody, artifactTexts);
+  const numeric = groundingReport(newBody, artifactTexts, { scope: "full" });
   const unverifiedKeys = citationKeys(newBody).filter((key) => !citationIsAllowed(project, key));
   const warnings = [
     ...invalidRefs.map((ref) => ({

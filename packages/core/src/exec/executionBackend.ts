@@ -71,10 +71,21 @@ export class SandboxExecBackend implements ExecutionBackend {
     await mkdir(join(nodeDir, "scripts"), { recursive: true });
     const scriptPath = join(nodeDir, "scripts", "generated.py");
     await writeFile(scriptPath, code, "utf8");
-    const profile = sandboxProfile(nodeDir);
+    const runtimeRoots = this.pythonPath.startsWith("/Users/") ? [dirname(dirname(this.pythonPath))] : [];
+    const profile = sandboxProfile(nodeDir, runtimeRoots);
+    // POSIX resource caps so a runaway loop or memory bomb dies from its limits:
+    // cpu seconds, file size (4 GiB in 512B blocks), open files, child processes.
+    const cpuCap = Math.max(10, Math.min(600, (options.timeoutSec ?? 60) * 2));
+    const shellCommand = [
+      `ulimit -t ${cpuCap} 2>/dev/null`,
+      "ulimit -f 8388608 2>/dev/null",
+      "ulimit -n 512 2>/dev/null",
+      "ulimit -u 256 2>/dev/null",
+      'exec sandbox-exec -p "$0" "$1" "$2"'
+    ].join("; ");
     const result = await runHostProcess(
-      "sandbox-exec",
-      ["-p", profile, this.pythonPath, scriptPath],
+      "/bin/sh",
+      ["-c", shellCommand, profile, this.pythonPath, scriptPath],
       nodeDir,
       (options.timeoutSec ?? 60) * 1000,
       options.signal
@@ -340,16 +351,28 @@ function rejected(kind: ExecutionBackendKind, reason: string): ExecutionResult {
   };
 }
 
-export function sandboxProfile(nodeDir: string): string {
-  const escapedNodeDir = nodeDir.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+export function sandboxProfile(nodeDir: string, runtimeRoots: string[] = []): string {
+  const escape = (path: string) => path.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+  // /tmp and /var are symlinks into /private on macOS; the sandbox matches the
+  // resolved path, so both spellings must be allowed.
+  const withPrivate = (path: string) => /^\/(?:tmp|var|etc)(?:\/|$)/.test(path) ? [path, `/private${path}`] : [path];
+  const nodePaths = withPrivate(nodeDir).map((path) => `(subpath "${escape(path)}")`).join(" ");
+  const runtimePaths = runtimeRoots.flatMap(withPrivate).map((path) => `(subpath "${escape(path)}")`).join(" ");
   return [
     "(version 1)",
     "(deny default)",
     "(allow process*)",
     "(allow sysctl-read)",
-    "(allow file-read* (subpath \"/System\") (subpath \"/usr\") (subpath \"/bin\") (subpath \"/sbin\") (subpath \"/Library\") (subpath \"/private/var/db\"))",
-    `(allow file-read* (subpath "${escapedNodeDir}"))`,
-    `(allow file-write* (subpath "${escapedNodeDir}"))`,
+    "(allow mach-lookup)",
+    "(allow file-read-metadata)",
+    // Deny-list model, matching the reference design: system reads are allowed
+    // (the interpreter needs dyld caches, locales, /dev), the user's home is
+    // denied wholesale, and only the node folder (plus an explicitly named
+    // runtime root, e.g. a pyenv install) is re-allowed beneath it.
+    "(allow file-read*)",
+    "(deny file-read* (subpath \"/Users\"))",
+    `(allow file-read* ${nodePaths}${runtimePaths ? " " + runtimePaths : ""})`,
+    `(allow file-write* ${nodePaths} (literal "/dev/null") (literal "/dev/tty"))`,
     "(deny network*)"
   ].join("\n");
 }
