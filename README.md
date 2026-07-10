@@ -13,6 +13,10 @@
 </p>
 
 <p align="center">
+  <a href="#日本語版-japanese">🇯🇵 日本語版はこのページの下部にあります</a>
+</p>
+
+<p align="center">
   <a href="docs/paper/nullius.pdf"><img alt="Paper" src="https://img.shields.io/badge/paper-PDF-284670"></a>
   <a href="https://github.com/Mikopoto/nullius/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Mikopoto/nullius/actions/workflows/ci.yml/badge.svg?branch=main"></a>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-111111">
@@ -274,11 +278,79 @@ The full audited gap list, in priority order, lives in [issue #1](../../issues/1
 - Attached file content is fenced as untrusted data in prompts (prompt-injection boundary).
 - The gates enforce *traceability*, not *truth*: read the manuscript, you stay the reviewer of record.
 
-## 日本語クイックガイド
+## 日本語版 (Japanese)
 
-アプリ内の **Tutorial タブ**に日本語の完全な手順があります(キー取得 → 保存 → プロジェクト作成 → データ追加 → 計画採択 → Full Auto → レビュー → 書き出し)。データは `data/` フォルダに置くだけで、実行のたびに自動で解析環境へコピーされ、AIに「このデータに基づいて研究せよ」と指示されます。
+**Nullius(ヌリウス)は、自分のマシン上で動く証拠ゲート付きAI研究ワークベンチです。** AIモデルが研究を計画し、解析コードを書いて実行し、原稿を書きます。ただし決定論的なゲートが、**実在する証拠まで遡れない数値や引用を一切レポートに入れさせません**。名前は英国王立協会のモットー *Nullius in verba*(誰の言葉も鵜呑みにするな)から。
 
-**AIエージェント(Codex / Claude Code など)と使う場合の要点**: Nulliusはエージェントを決定論的にするのではなく、**生成は確率的なまま、判定だけを決定論的なコードにし、判定を迂回する出口を全部塞ぎます**。エージェントは (1) 自分の出力を自分で採点できず(審査はLLMでなく値照合)、(2) 実行せずに証拠を作れず(サンドボックス実行の生成物のみが証拠)、(3) 採択後に成功基準を動かせず(プロトコルロック)、(4) 原稿に直接書き込めません(ゲート付きパッチのみ)。結果として研究ループが「テストが通るまで直す」というTDDと同型になり、`nullius verify --json` の exit 0 が「全数値・全引用が証拠まで遡れる」ことの機械的な証明になります。ただしゲートが保証するのは**事実の追跡可能性**であり、手法の妥当性(サンプル数や統計設計)は今も人間とreviewerの仕事です。
+- すべての数値は、サンドボックスで実際に実行されたコードの生成物の値と照合されます(部分文字列でなく値の一致)
+- すべての引用はCrossrefで実在・著者・年・撤回を照合されます
+- ブロッキング警告が1つでもあるパッチは、全自動実行中でも**書き込まれる前に**拒否されます
+- 3つのAI役割(planner / executor / reviewer)は独立に設定でき、相互監視します。ライブコンソールに全トークンと推論が流れます
+
+効果の実例: 同じ gpt-4o-mini に40点のデータを直接聞くと、傾き **1.9450**(真値3.0、35%の誤り)を自信満々に報告しました。Nullius経由では同じモデルがサンドボックス実行で **3.0007** を算出し、計算していない統計量を原稿に足そうとした1回はゲートでブロックされました。詳細は論文 [`docs/paper/nullius.pdf`](docs/paper/nullius.pdf) と生ログ [`docs/paper/evaluation/`](docs/paper/evaluation/) にあります。
+
+### インストール
+
+**方法A: macOSアプリ(Apple Silicon)** — [Releases](../../releases) から `Nullius.dmg` をダウンロードし、Applicationsへドラッグ。未notarize のため初回は右クリック→開く(または `xattr -dr com.apple.quarantine /Applications/Nullius.app`)。アプリは [Node.js 20+](https://nodejs.org) を使ってローカル研究サーバーを起動します。
+
+**方法B: ソースから(Windows / Linux / macOS)** — Node.js 20+、pnpm、デスクトップアプリにはさらに Rust + [Tauri v2 の前提条件](https://v2.tauri.app/start/prerequisites/) が必要です。
+
+```bash
+git clone https://github.com/Mikopoto/nullius.git
+cd nullius && pnpm install && pnpm build && pnpm test
+```
+
+### クイックスタート(GUI)
+
+**一番早い体験: Setup画面の「Try the 60-second demo」を押してください。** サンプルCSV入りのプロジェクトが自動生成され、APIキー不要・課金なしの決定論的デモエージェントで本物のパイプラインが走ります。計画を読んで採択し、ゲートが証拠付きの文章だけを通す様子を60秒で見られます。
+
+本番の流れ(アプリ内のTutorialタブに日英の完全版があります):
+
+1. **APIキー** — Setup → API Keys。おすすめは [OpenRouter](https://openrouter.ai)(1つのキーで多くのモデル)。macOSはキーチェーンに保存、Windows/Linuxはセッション中のみメモリ保持(恒久化は環境変数で)。キーがプロジェクトファイルに書かれることはありません
+2. **プロジェクト** — Browse…で空フォルダを選び、研究の問いを書く
+3. **データ(任意)** — 「Add data files…」でCSV等を追加。実行のたびに自動で解析環境の `./data/` へ配置され、AIに「このデータに基づいて研究せよ」と指示されます。無ければAIが計画に必要なデータを自分で生成します
+4. **モデル(任意)** — 役割ごとにプロバイダ+モデルIDを設定(既定 `openrouter/auto`)
+5. **計画** — Generate Plan → 内容(目的・方法・観測量・成功基準・反証基準)を読んで **Adopt**。採択で成功基準が凍結され、AIは後からゴールを動かせません
+6. **Run Full Auto** — ライブコンソールを眺め、止まったら介入カードを読み、必要なら指示を書いてResume
+7. **レビューと出力** — Manuscriptでパッチを承認/却下、Readinessの信号を確認、Export。成果物は `<project>/manuscript/report.md`
+
+### クイックスタート(CLI)
+
+無料で試す(APIキー不要のmockエージェント):
+
+```bash
+nullius() { node packages/cli/dist/index.js "$@"; }
+
+nullius init demo --question "Is y linear in x?"
+nullius run demo --mock          # 計画を起草して停止
+nullius list plans demo          # 計画IDを確認
+nullius adopt <planId> demo      # 人間の承認でプロトコルをロック
+nullius run demo --mock          # 生成→実行→レビュー→ゲート→書き込み
+nullius verify demo --json       # 全数値が追跡可能なら exit 0
+```
+
+本番は `nullius keys set openrouter sk-or-...`(macOSキーチェーン)または環境変数 `OPENROUTER_API_KEY` 等でキーを渡し、`--mock` を外すだけです。モデルは `nullius init --provider/--model`(役割別は `--planner-model` 等)、後から `nullius models` で変更できます。設定は `<project>/nullius.json` に保存され、キーは保存されません。
+
+`nullius verify --json` は**研究CI**のための安定契約です: 根拠のない数値・未検証の引用・再現しないノードを含むコミットはビルドを落とせます。全フィールドの仕様は [`docs/verify-contract.md`](docs/verify-contract.md) に凍結されています。同梱のGitHub Action([`action/`](action/README.md)、`uses: Mikopoto/nullius/action@v0`)を使えば数行で導入できます。
+
+### AIエージェントと使う(想定用途の本命)
+
+CodexやClaude Codeにこのリポジトリを触らせる場合、エージェントはまず [`AGENTS.md`](AGENTS.md) を読みます(自動で読まれる契約書です)。要点:
+
+- 「結論を自分で書くな、Nullius経由で研究しろ」。`manuscript/report.md` を直接編集する経路はなく、ゲートを通ったパッチだけが書き込めます
+- ループは `init → run(計画で停止)→ list plans → adopt → run → list patches → approve/reject → verify --json が exit 0 になるまで` 。exit code とゲートレポートという**外部の決定論的シグナル**に反応するだけなので、コーディングエージェントが得意なTDDと同型になります
+- エージェントはAPIキーに触れません(OSキーチェーン内)。採択(adopt)は人間に残せます
+- GUIを同じプロジェクトで開いておくと、**Live Activity** ペインがCLI/エージェントの動きをリアルタイムに映し、二重実行も防止されます。GUIの **Copy Agent Handoff** で、エージェントに渡すプロンプト一式をコピーできます
+
+**なぜエージェントはNulliusを騙せないのか。** Nulliusはエージェントを決定論的にするのではありません。生成は確率的なまま、**判定だけが決定論的なコード**になり、判定を迂回する出口が塞がれます: ①自分の出力を自分で採点できない(審査はLLMでなく値照合 — 反論の余地がない)、②実行せずに証拠を作れない(サンドボックス実行の生成物だけが証拠、ネットワークも遮断)、③採択後に成功基準を動かせない(プロトコルロック)、④原稿に直接書き込めない(ゲート付きパッチのみ)。誤った結論は今までどおり*提案*はされますが、*記録には残れません*。なお、ゲートが保証するのは**事実の追跡可能性**であり、手法の妥当性(サンプル数や統計設計)の判断は今もreviewerロールと人間の仕事です。
+
+### 構成と現状
+
+TypeScriptモノレポ: `packages/core`(ゲート+オーケストレータ)、`packages/conformance`(言語非依存のテストベクトル=仕様)、`packages/cli`、`packages/server`(HTTP/WebSocket)、`apps/desktop`(Tauri v2 + React)。生成Pythonは既定で**WebAssemblyサンドボックス**(Pyodide)で実行され、ネットワークは構造的に存在しません(Docker不要・全OS同一)。macOSの `sandbox-exec` と Docker バックエンドも選択可能。サンドボックスを確立できない場合、実行は拒否されます(黙った格下げはしません)。
+
+成熟しているのは**コアエンジンとCLI**です(ゲート・オーケストレータ・サンドボックス・`verify --json` 契約は100件超のテストと敵対ケースで担保)。**デスクトップGUIは動作しますが未完成**で、既知のギャップは [issue #1](../../issues/1) に優先度付きで公開しています。確実性が必要な用途にはCLIを推奨します。
+
+セキュリティ: APIキーはOSキーチェーン/環境変数/プロセスメモリのみ。生成コードは信頼せず、deny-by-defaultサンドボックス+資源上限+拒否原則。添付ファイルの内容はプロンプト内で「信頼できないデータ」として隔離されます(プロンプトインジェクション境界)。
 
 ## License
 
